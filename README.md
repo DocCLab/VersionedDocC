@@ -63,6 +63,8 @@ Use an explicit `versions` array when a site needs fixed release snapshots:
 `localDependencies` maps SwiftPM package identities to canonical local Git
 repositories. VersionedDocC creates temporary shared clones at the exact
 revisions recorded in the selected source tag's `Package.resolved` file.
+Nested SwiftPM builds disable their own sandbox because the command plugin is
+already constrained by SwiftPM's outer sandbox.
 
 ## SwiftPM plugin
 

@@ -377,6 +377,9 @@ def build_version(
             build_command = [
                 "swift",
                 "build",
+                # Command plugins already run inside SwiftPM's sandbox. A
+                # nested swift build can't apply a second sandbox profile.
+                "--disable-sandbox",
                 "--package-path",
                 str(source_root),
                 "--target",
