@@ -1,0 +1,72 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/OpenSwiftUIProject/VersionedDocC/0.0.1/Schema/VersionedDocC.schema.json",
+  "title": "VersionedDocC configuration",
+  "type": "object",
+  "required": [
+    "schemaVersion",
+    "projectName",
+    "moduleName",
+    "targetName",
+    "catalogPath",
+    "hostingBasePath"
+  ],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "projectName": { "type": "string", "minLength": 1 },
+    "moduleName": { "type": "string", "minLength": 1 },
+    "modulePath": { "type": "string", "minLength": 1 },
+    "targetName": { "type": "string", "minLength": 1 },
+    "catalogPath": { "type": "string", "minLength": 1 },
+    "hostingBasePath": { "type": "string", "pattern": "^/[A-Za-z0-9._/-]+$" },
+    "defaultVersion": { "type": "string", "default": "main" },
+    "outputPath": { "type": "string" },
+    "cachePath": { "type": "string" },
+    "sourceRepository": { "type": "string", "format": "uri" },
+    "developmentSourceRef": { "type": "string", "default": "main" },
+    "versions": {
+      "type": "array",
+      "minItems": 2,
+      "items": {
+        "type": "object",
+        "required": ["name", "ref"],
+        "properties": {
+          "name": { "type": "string" },
+          "ref": { "type": "string" },
+          "sourceRef": { "type": "string" }
+        },
+        "additionalProperties": false
+      }
+    },
+    "releasePolicy": {
+      "type": "object",
+      "properties": {
+        "latest": { "type": "integer", "minimum": 1, "default": 2 },
+        "development": {
+          "type": "object",
+          "properties": {
+            "name": { "type": "string", "default": "main" },
+            "ref": { "type": "string", "default": "HEAD" }
+          }
+        }
+      }
+    },
+    "symbolGraph": {
+      "type": "object",
+      "properties": {
+        "minimumAccessLevel": { "type": "string", "default": "public" },
+        "skipProtocolImplementations": { "type": "boolean", "default": true }
+      }
+    },
+    "allowedModules": { "type": "array", "items": { "type": "string" } },
+    "environment": { "type": "object", "additionalProperties": { "type": ["string", "number", "boolean"] } },
+    "localDependencies": { "type": "object", "additionalProperties": { "type": "string" } },
+    "buildArguments": { "type": "array", "items": { "type": "string" } },
+    "doccArguments": { "type": "array", "items": { "type": "string" } }
+  },
+  "oneOf": [
+    { "required": ["versions"] },
+    { "required": ["releasePolicy"] }
+  ],
+  "additionalProperties": false
+}

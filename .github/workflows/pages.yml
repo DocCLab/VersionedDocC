@@ -1,0 +1,58 @@
+name: Versioned DocC Pages
+
+on:
+  workflow_call:
+    inputs:
+      config:
+        description: VersionedDocC configuration path
+        required: false
+        default: VersionedDocC.json
+        type: string
+      artifact-path:
+        description: Static website root uploaded to Pages
+        required: false
+        default: .docs/build/versioned-site
+        type: string
+      deploy:
+        description: Deploy the assembled artifact to GitHub Pages
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+jobs:
+  build:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/cache@v6
+        with:
+          path: .docs/cache/versioned-docc
+          key: versioned-docc-${{ runner.os }}-${{ hashFiles(inputs.config, 'Package.resolved') }}-${{ github.sha }}
+          restore-keys: |
+            versioned-docc-${{ runner.os }}-${{ hashFiles(inputs.config, 'Package.resolved') }}-
+            versioned-docc-${{ runner.os }}-
+      - uses: OpenSwiftUIProject/VersionedDocC@0.0.1
+        with:
+          config: ${{ inputs.config }}
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: ${{ inputs.artifact-path }}
+
+  deploy:
+    if: inputs.deploy
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v5

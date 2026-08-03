@@ -1,0 +1,14 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v7
+      - run: swift build
+      - run: swift run versioned-docc --version
+      - run: python3 -m unittest discover -s Tests -p 'test_*.py'

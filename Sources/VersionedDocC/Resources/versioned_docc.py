@@ -1,0 +1,714 @@
+#!/usr/bin/env python3
+
+import argparse
+import datetime as dt
+import hashlib
+import html
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+from functools import partial
+from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+
+
+VERSION = "0.0.1"
+SEMVER = re.compile(r"^v?(\d+)\.(\d+)\.(\d+)(?:[-+].*)?$")
+OPTIONS_TOKEN = "__VERSIONED_DOCC_VERSION_OPTIONS__"
+
+
+class VersionedDocCError(RuntimeError):
+    pass
+
+
+def run(command, cwd=None, environment=None, capture=False, log_path=None):
+    merged_environment = os.environ.copy()
+    if environment:
+        merged_environment.update({key: str(value) for key, value in environment.items()})
+    if log_path:
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        with log_path.open("w", encoding="utf-8") as log:
+            result = subprocess.run(
+                command,
+                cwd=cwd,
+                env=merged_environment,
+                stdout=log,
+                stderr=subprocess.STDOUT,
+                text=True,
+            )
+        if result.returncode:
+            tail = log_path.read_text(encoding="utf-8", errors="replace").splitlines()[-120:]
+            raise VersionedDocCError(
+                f"command failed ({result.returncode}): {' '.join(map(str, command))}\n"
+                + "\n".join(tail)
+            )
+        return ""
+    result = subprocess.run(
+        command,
+        cwd=cwd,
+        env=merged_environment,
+        capture_output=capture,
+        text=True,
+    )
+    if result.returncode:
+        details = (result.stderr or result.stdout or "").strip()
+        raise VersionedDocCError(
+            f"command failed ({result.returncode}): {' '.join(map(str, command))}"
+            + (f"\n{details}" if details else "")
+        )
+    return result.stdout.strip() if capture else ""
+
+
+def git(repository, *arguments):
+    return run(["git", "-C", str(repository), *arguments], capture=True)
+
+
+def resolve_path(root, value):
+    path = Path(value).expanduser()
+    return path.resolve() if path.is_absolute() else (root / path).resolve()
+
+
+def ensure_safe_child(path, parent, label):
+    try:
+        path.resolve().relative_to(parent.resolve())
+    except ValueError as error:
+        raise VersionedDocCError(f"unsafe {label} outside {parent}: {path}") from error
+    if path.resolve() == parent.resolve():
+        raise VersionedDocCError(f"refusing {label} at protected root: {path}")
+
+
+def remove_tree(path, parent, label):
+    if not path.exists():
+        return
+    ensure_safe_child(path, parent, label)
+    shutil.rmtree(path)
+
+
+def sha256_bytes(value):
+    return hashlib.sha256(value).hexdigest()
+
+
+def sha256_file(path):
+    digest = hashlib.sha256()
+    with path.open("rb") as source:
+        for block in iter(lambda: source.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def load_config(package_root, config_path):
+    path = resolve_path(package_root, config_path)
+    if not path.is_file():
+        raise VersionedDocCError(f"missing configuration file: {path}")
+    with path.open(encoding="utf-8") as source:
+        config = json.load(source)
+    if config.get("schemaVersion") != 1:
+        raise VersionedDocCError("configuration schemaVersion must be 1")
+    required = ["projectName", "moduleName", "targetName", "catalogPath", "hostingBasePath"]
+    missing = [key for key in required if not config.get(key)]
+    if missing:
+        raise VersionedDocCError(f"missing configuration keys: {', '.join(missing)}")
+    base_path = "/" + config["hostingBasePath"].strip("/")
+    if not re.fullmatch(r"(?:/[A-Za-z0-9._-]+)+", base_path):
+        raise VersionedDocCError(f"invalid hostingBasePath: {base_path}")
+    config["hostingBasePath"] = base_path
+    config.setdefault("modulePath", config["moduleName"].lower())
+    config.setdefault("defaultVersion", "main")
+    config.setdefault("outputPath", f".docs/build/versioned-site{base_path}")
+    config.setdefault("cachePath", ".docs/cache/versioned-docc")
+    config.setdefault("buildArguments", ["--disable-index-store"])
+    config.setdefault("doccArguments", ["--emit-digest"])
+    config.setdefault("environment", {})
+    config.setdefault("localDependencies", {})
+    config.setdefault("allowedModules", [config["moduleName"]])
+    config.setdefault("symbolGraph", {})
+    config["symbolGraph"].setdefault("minimumAccessLevel", "public")
+    config["symbolGraph"].setdefault("skipProtocolImplementations", True)
+    return config, path
+
+
+def semantic_versions(repository, count):
+    tags = git(repository, "tag", "--list").splitlines()
+    parsed = []
+    for tag in tags:
+        match = SEMVER.match(tag)
+        if match:
+            parsed.append((tuple(map(int, match.groups())), tag))
+    parsed.sort(reverse=True)
+    return [tag for _, tag in parsed[:count]]
+
+
+def configured_versions(repository, config):
+    if config.get("versions"):
+        versions = config["versions"]
+    else:
+        policy = config.get("releasePolicy", {"latest": 2})
+        development = policy.get("development", {"name": "main", "ref": "HEAD"})
+        versions = [development]
+        versions.extend(
+            {"name": tag.lstrip("v"), "ref": tag}
+            for tag in semantic_versions(repository, int(policy.get("latest", 2)))
+        )
+    names = set()
+    normalized = []
+    for item in versions:
+        name = item.get("name")
+        ref = item.get("ref", "HEAD" if name == "main" else name)
+        if not name or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", name):
+            raise VersionedDocCError(f"invalid version name: {name}")
+        if name in names:
+            raise VersionedDocCError(f"duplicate version name: {name}")
+        names.add(name)
+        normalized.append({"name": name, "ref": ref})
+    if config["defaultVersion"] not in names:
+        raise VersionedDocCError(
+            f"defaultVersion {config['defaultVersion']} isn't in the version list"
+        )
+    if len(normalized) < 2:
+        raise VersionedDocCError("at least two documentation versions are required")
+    return normalized
+
+
+def find_docc():
+    if shutil.which("xcrun"):
+        return ["xcrun", "docc"], Path(run(["xcrun", "--find", "docc"], capture=True))
+    executable = shutil.which("docc")
+    if executable:
+        return [executable], Path(executable)
+    raise VersionedDocCError("DocC is not installed")
+
+
+def swift_module(precise_identifier):
+    if not precise_identifier.startswith("s:"):
+        return None
+    remainder = precise_identifier[2:]
+    match = re.match(r"(\d+)", remainder)
+    if not match:
+        return None
+    length = int(match.group(1))
+    start = len(match.group(1))
+    return remainder[start : start + length]
+
+
+def filter_symbol_graph(path, allowed_modules):
+    with path.open(encoding="utf-8") as source:
+        graph = json.load(source)
+    original_symbols = graph.get("symbols", [])
+    symbols = [
+        symbol
+        for symbol in original_symbols
+        if swift_module(symbol.get("identifier", {}).get("precise", "")) in allowed_modules
+    ]
+    identifiers = {symbol["identifier"]["precise"] for symbol in symbols}
+    original_relationships = graph.get("relationships", [])
+    relationships = [
+        relationship
+        for relationship in original_relationships
+        if relationship.get("source") in identifiers
+        and (
+            relationship.get("target") in identifiers
+            or relationship.get("targetFallback") is not None
+        )
+    ]
+    graph["symbols"] = symbols
+    graph["relationships"] = relationships
+    with path.open("w", encoding="utf-8") as destination:
+        json.dump(graph, destination, separators=(",", ":"))
+        destination.write("\n")
+    print(
+        f"{path.name}: {len(original_symbols)} -> {len(symbols)} symbols; "
+        f"{len(original_relationships)} -> {len(relationships)} relationships"
+    )
+
+
+class PreparedSource:
+    def __init__(self, package_root, config, version, commit):
+        self.package_root = package_root
+        self.config = config
+        self.version = version
+        self.commit = commit
+        self.root = None
+        self.worktrees = []
+        self.temporary_root = None
+
+    def __enter__(self):
+        dependencies = self.config.get("localDependencies", {})
+        current_commit = git(self.package_root, "rev-parse", "HEAD")
+        if not dependencies and self.commit == current_commit:
+            self.root = self.package_root
+            return self.root
+
+        self.temporary_root = Path(
+            tempfile.mkdtemp(prefix=f"versioned-docc-{self.version['name']}-")
+        )
+        self.root = self.temporary_root / self.package_root.name
+        run(["git", "-C", str(self.package_root), "worktree", "add", "--detach", str(self.root), self.commit])
+        self.worktrees.append((self.package_root, self.root))
+        if not dependencies:
+            return self.root
+
+        resolved_path = self.root / "Package.resolved"
+        if not resolved_path.is_file():
+            raise VersionedDocCError(f"{self.version['name']} has no Package.resolved")
+        with resolved_path.open(encoding="utf-8") as source:
+            resolved = json.load(source)
+        pins = {pin["identity"].lower(): pin for pin in resolved.get("pins", [])}
+        for identity, configured_path in dependencies.items():
+            pin = pins.get(identity.lower())
+            revision = pin and pin.get("state", {}).get("revision")
+            if not revision:
+                raise VersionedDocCError(
+                    f"{self.version['name']} doesn't pin {identity} in Package.resolved"
+                )
+            repository = resolve_path(self.package_root, configured_path)
+            if not (repository / ".git").exists() and not (repository / ".git").is_file():
+                raise VersionedDocCError(f"missing local dependency repository: {repository}")
+            try:
+                git(repository, "cat-file", "-e", f"{revision}^{{commit}}")
+            except VersionedDocCError:
+                print(f"Fetching {identity} revision {revision}")
+                run(["git", "-C", str(repository), "fetch", "origin", revision])
+            destination = self.temporary_root / repository.name
+            run(["git", "-C", str(repository), "worktree", "add", "--detach", str(destination), revision])
+            self.worktrees.append((repository, destination))
+        return self.root
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        for repository, worktree in reversed(self.worktrees):
+            subprocess.run(
+                ["git", "-C", str(repository), "worktree", "remove", "--force", str(worktree)],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        if self.temporary_root and self.temporary_root.exists():
+            shutil.rmtree(self.temporary_root, ignore_errors=True)
+
+
+def render_header(template, config, version, build_date):
+    base = config["hostingBasePath"]
+    module_path = config["modulePath"]
+    replacements = {
+        "__VERSIONED_DOCC_PROJECT_NAME__": config["projectName"],
+        "__VERSIONED_DOCC_HOME_PATH__": f"{base}/{version}/documentation/{module_path}/",
+        "__VERSIONED_DOCC_CHANGES_PATH__": f"{base}/{config['defaultVersion']}/changes/",
+        "__VERSIONED_DOCC_BUILD_DATE__": build_date,
+        "__VERSIONED_DOCC_CURRENT_VERSION__": version,
+    }
+    for token, value in replacements.items():
+        template = template.replace(token, value)
+    return template
+
+
+def build_fingerprint(config, docc_binary, header_template):
+    renderer_path = os.environ.get("DOCC_HTML_DIR")
+    if renderer_path:
+        renderer = resolve_path(Path.cwd(), renderer_path)
+        try:
+            renderer_id = git(renderer, "rev-parse", "HEAD")
+        except VersionedDocCError:
+            renderer_id = sha256_file(renderer / "index.html")
+    else:
+        renderer_id = "bundled"
+    payload = {
+        "versionedDocC": VERSION,
+        "swift": run(["swift", "--version"], capture=True),
+        "docc": sha256_file(docc_binary),
+        "renderer": renderer_id,
+        "header": sha256_bytes(header_template.encode()),
+        "target": config["targetName"],
+        "module": config["moduleName"],
+        "catalog": config["catalogPath"],
+        "environment": config["environment"],
+        "buildArguments": config["buildArguments"],
+        "doccArguments": config["doccArguments"],
+        "symbolGraph": config["symbolGraph"],
+        "allowedModules": config["allowedModules"],
+    }
+    return sha256_bytes(json.dumps(payload, sort_keys=True).encode())
+
+
+def cache_valid(cache_entry, commit, fingerprint, module_name):
+    metadata_path = cache_entry / "metadata.json"
+    graph_path = cache_entry / "symbols" / f"{module_name}.symbols.json"
+    site_path = cache_entry / "site" / "index.html"
+    if not metadata_path.is_file() or not graph_path.is_file() or not site_path.is_file():
+        return False
+    with metadata_path.open(encoding="utf-8") as source:
+        metadata = json.load(source)
+    return metadata.get("sourceCommit") == commit and metadata.get("buildFingerprint") == fingerprint
+
+
+def build_version(
+    package_root,
+    config,
+    version,
+    commit,
+    cache_root,
+    logs_root,
+    fingerprint,
+    build_date,
+    header_template,
+    docc_command,
+):
+    cache_entry = cache_root / version["name"]
+    staging = cache_root / f".building-{version['name']}-{os.getpid()}"
+    remove_tree(staging, cache_root, "cache staging directory")
+    (staging / "symbols").mkdir(parents=True)
+    (staging / "site").mkdir()
+    (staging / "catalog").mkdir()
+    print(f"Building {version['name']} ({commit[:8]})")
+    try:
+        with PreparedSource(package_root, config, version, commit) as source_root:
+            graph_directory = staging / "symbols"
+            build_command = [
+                "swift",
+                "build",
+                "--package-path",
+                str(source_root),
+                "--target",
+                config["targetName"],
+                *config["buildArguments"],
+                "-Xswiftc",
+                "-emit-symbol-graph",
+                "-Xswiftc",
+                "-emit-symbol-graph-dir",
+                "-Xswiftc",
+                str(graph_directory),
+                "-Xswiftc",
+                "-symbol-graph-minimum-access-level",
+                "-Xswiftc",
+                config["symbolGraph"]["minimumAccessLevel"],
+            ]
+            if config["symbolGraph"].get("skipProtocolImplementations", True):
+                # Force the symbol-graph option through SwiftPM's driver. Passing
+                # it as a plain Swift driver option doesn't reach the frontend
+                # emit-module job with current Apple Swift toolchains.
+                build_command.extend(
+                    ["-Xswiftc", "-Xfrontend", "-Xswiftc", "-skip-protocol-implementations"]
+                )
+            run(
+                build_command,
+                environment=config["environment"],
+                log_path=logs_root / f"{version['name']}-swift-build.log",
+            )
+            graph_path = graph_directory / f"{config['moduleName']}.symbols.json"
+            if not graph_path.is_file():
+                raise VersionedDocCError(f"missing symbol graph: {graph_path}")
+            filter_symbol_graph(graph_path, set(config["allowedModules"]))
+
+            source_catalog = source_root / config["catalogPath"]
+            if not source_catalog.is_dir():
+                raise VersionedDocCError(f"missing DocC catalog: {source_catalog}")
+            catalog = staging / "catalog" / source_catalog.name
+            shutil.copytree(source_catalog, catalog)
+            (catalog / "header.html").write_text(
+                render_header(header_template, config, version["name"], build_date),
+                encoding="utf-8",
+            )
+            docc = [
+                *docc_command,
+                "convert",
+                str(catalog),
+                "--additional-symbol-graph-dir",
+                str(graph_directory),
+                "--transform-for-static-hosting",
+                "--output-path",
+                str(staging / "site"),
+                "--hosting-base-path",
+                f"{config['hostingBasePath']}/{version['name']}",
+                "--default-code-listing-language",
+                "swift",
+                "--experimental-enable-custom-templates",
+                *config["doccArguments"],
+            ]
+            source_repository = config.get("sourceRepository")
+            if source_repository:
+                source_ref = version.get("sourceRef", version["ref"])
+                if source_ref == "HEAD":
+                    source_ref = config.get("developmentSourceRef", "main")
+                docc.extend(
+                    [
+                        "--source-service",
+                        "github",
+                        "--source-service-base-url",
+                        f"{source_repository.rstrip('/')}/blob/{source_ref}",
+                        "--checkout-path",
+                        str(source_root),
+                    ]
+                )
+            run(docc, log_path=logs_root / f"{version['name']}-docc.log")
+            if not (staging / "site" / "index.html").is_file():
+                raise VersionedDocCError(f"DocC emitted no index for {version['name']}")
+            theme_settings = staging / "site" / "theme-settings.json"
+            if not theme_settings.exists():
+                theme_settings.write_text("{}\n", encoding="utf-8")
+    except Exception:
+        remove_tree(staging, cache_root, "failed cache staging directory")
+        raise
+
+    remove_tree(staging / "catalog", staging, "temporary catalog")
+    metadata = {
+        "schemaVersion": 1,
+        "generatorVersion": VERSION,
+        "version": version["name"],
+        "ref": version["ref"],
+        "sourceCommit": commit,
+        "buildDate": build_date,
+        "buildFingerprint": fingerprint,
+    }
+    (staging / "metadata.json").write_text(
+        json.dumps(metadata, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+    remove_tree(cache_entry, cache_root, "version cache")
+    staging.rename(cache_entry)
+    print(f"Cached {version['name']} at {cache_entry}")
+
+
+def version_options(versions, current):
+    releases = [item["name"] for item in versions if item["name"] != "main"]
+    latest_release = releases[0] if releases else None
+    options = []
+    for item in versions:
+        name = item["name"]
+        label = "main (Development)" if name == "main" else name
+        if name == latest_release:
+            label = f"{name} (Latest Release)"
+        selected = " selected" if name == current else ""
+        options.append(
+            f'        <option value="{html.escape(name)}"{selected}>{html.escape(label)}</option>'
+        )
+    return "\n".join(options)
+
+
+def finalize_site(site_root, versions, current):
+    replacement = version_options(versions, current)
+    replacements = 0
+    for html_path in site_root.rglob("*.html"):
+        contents = html_path.read_text(encoding="utf-8")
+        count = contents.count(OPTIONS_TOKEN)
+        if count:
+            html_path.write_text(contents.replace(OPTIONS_TOKEN, replacement), encoding="utf-8")
+            replacements += count
+    if not replacements:
+        raise VersionedDocCError(f"no version selector token found under {site_root}")
+    print(f"{current}: injected {len(versions)} versions into {replacements} templates")
+
+
+def root_index(config):
+    base = config["hostingBasePath"]
+    default = config["defaultVersion"]
+    module_path = config["modulePath"]
+    target = f"{base}/{default}/documentation/{module_path}/"
+    return f"""<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="refresh" content="0; url={html.escape(target)}"><link rel="canonical" href="{html.escape(target)}">
+<title>{html.escape(config['projectName'])} Documentation</title>
+<script>window.location.replace({json.dumps(target)} + window.location.search + window.location.hash);</script>
+</head><body><p>Opening <a href="{html.escape(target)}">{html.escape(config['projectName'])} documentation</a>.</p></body></html>\n"""
+
+
+def assemble(package_root, config, versions, cache_root, output_path, build_date):
+    output_parent = output_path.parent
+    output_parent.mkdir(parents=True, exist_ok=True)
+    remove_tree(output_path, output_parent, "assembled output")
+    output_path.mkdir(parents=True)
+    manifest = {
+        "schemaVersion": 1,
+        "generatorVersion": VERSION,
+        "defaultVersion": config["defaultVersion"],
+        "assembledAt": build_date,
+        "versions": [],
+    }
+    for version in versions:
+        cache_entry = cache_root / version["name"]
+        with (cache_entry / "metadata.json").open(encoding="utf-8") as source:
+            metadata = json.load(source)
+        manifest["versions"].append(
+            {
+                "name": version["name"],
+                "path": f"{config['hostingBasePath']}/{version['name']}/",
+                "buildDate": metadata["buildDate"],
+                "sourceCommit": metadata["sourceCommit"],
+            }
+        )
+        version_output = output_path / version["name"]
+        shutil.copytree(cache_entry / "site", version_output)
+        finalize_site(version_output, versions, version["name"])
+    (output_path / "versions.json").write_text(
+        json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+    (output_path / "index.html").write_text(root_index(config), encoding="utf-8")
+    redirect = (
+        f"{config['hostingBasePath']}/documentation/* "
+        f"{config['hostingBasePath']}/{config['defaultVersion']}/documentation/:splat 301\n"
+    )
+    (output_path / "_redirects").write_text(redirect, encoding="utf-8")
+    (output_path / ".nojekyll").touch()
+
+    api_script = Path(__file__).with_name("api_changes.py")
+    api_command = [
+        sys.executable,
+        str(api_script),
+        "--output-root",
+        str(output_path),
+        "--hosting-base-path",
+        config["hostingBasePath"],
+        "--default-version",
+        config["defaultVersion"],
+        "--build-date",
+        build_date,
+        "--project-name",
+        config["projectName"],
+        "--module-path",
+        config["modulePath"],
+    ]
+    for version in versions:
+        api_command.extend(
+            [
+                "--symbol-graph",
+                f"{version['name']}={cache_root / version['name'] / 'symbols' / (config['moduleName'] + '.symbols.json')}",
+            ]
+        )
+    run(api_command)
+    print(f"Versioned documentation assembled at {output_path}")
+
+
+def build_command(arguments):
+    package_root = resolve_path(Path.cwd(), arguments.package_path)
+    if not (package_root / "Package.swift").is_file():
+        raise VersionedDocCError(f"not a Swift package: {package_root}")
+    config, config_path = load_config(package_root, arguments.config)
+    versions = configured_versions(package_root, config)
+    output_path = resolve_path(package_root, arguments.output or config["outputPath"])
+    cache_root = resolve_path(package_root, arguments.cache or config["cachePath"])
+    docs_root = package_root / ".docs"
+    ensure_safe_child(output_path, package_root, "output path")
+    ensure_safe_child(cache_root, package_root, "cache path")
+    cache_root.mkdir(parents=True, exist_ok=True)
+    logs_root = docs_root / "logs" / "versioned-docc"
+    logs_root.mkdir(parents=True, exist_ok=True)
+    build_date = arguments.build_date or os.environ.get("DOCS_BUILD_DATE") or dt.datetime.now(dt.UTC).date().isoformat()
+    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", build_date):
+        raise VersionedDocCError("build date must use YYYY-MM-DD")
+    header_template = Path(__file__).with_name("header.html").read_text(encoding="utf-8")
+    docc_command, docc_binary = find_docc()
+    fingerprint = build_fingerprint(config, docc_binary, header_template)
+    print(f"VersionedDocC {VERSION}")
+    print(f"  Config: {config_path}")
+    print(f"  Versions: {' '.join(item['name'] for item in versions)}")
+    print(f"  Cache: {cache_root}")
+    print(f"  Output: {output_path}")
+    for version in versions:
+        commit = git(package_root, "rev-parse", f"{version['ref']}^{{commit}}")
+        cache_entry = cache_root / version["name"]
+        if not arguments.rebuild and cache_valid(
+            cache_entry, commit, fingerprint, config["moduleName"]
+        ):
+            print(f"Cache hit: {version['name']} ({commit[:8]})")
+            continue
+        if arguments.assemble_only:
+            raise VersionedDocCError(f"cache miss for {version['name']} in assemble-only mode")
+        build_version(
+            package_root,
+            config,
+            version,
+            commit,
+            cache_root,
+            logs_root,
+            fingerprint,
+            build_date,
+            header_template,
+            docc_command,
+        )
+    assemble(package_root, config, versions, cache_root, output_path, build_date)
+    print(
+        f"Preview: http://127.0.0.1:{arguments.preview_port}"
+        f"{config['hostingBasePath']}/{config['defaultVersion']}/changes/"
+    )
+
+
+def preview_command(arguments):
+    package_root = resolve_path(Path.cwd(), arguments.package_path)
+    config, _ = load_config(package_root, arguments.config)
+    output_path = resolve_path(package_root, arguments.output or config["outputPath"])
+    web_root = output_path.parent
+    if not output_path.is_dir():
+        raise VersionedDocCError(f"missing assembled site: {output_path}")
+    legacy_prefix = f"{config['hostingBasePath']}/documentation/"
+    versioned_prefix = f"{config['hostingBasePath']}/{config['defaultVersion']}/documentation/"
+
+    class Handler(SimpleHTTPRequestHandler):
+        def redirect_legacy(self):
+            path, separator, query = self.path.partition("?")
+            if not path.startswith(legacy_prefix):
+                return False
+            target = versioned_prefix + path[len(legacy_prefix) :]
+            if separator:
+                target += "?" + query
+            self.send_response(301)
+            self.send_header("Location", target)
+            self.send_header("Cache-Control", "public, max-age=3600")
+            self.end_headers()
+            return True
+
+        def do_GET(self):
+            if not self.redirect_legacy():
+                super().do_GET()
+
+        def do_HEAD(self):
+            if not self.redirect_legacy():
+                super().do_HEAD()
+
+    handler = partial(Handler, directory=str(web_root))
+    server = ThreadingHTTPServer((arguments.bind, arguments.port), handler)
+    print(f"Serving {web_root} at http://{arguments.bind}:{arguments.port}")
+    print(f"Wildcard redirect: {legacy_prefix}* -> {versioned_prefix}:splat")
+    server.serve_forever()
+
+
+def parse_arguments():
+    parser = argparse.ArgumentParser(
+        prog="versioned-docc",
+        description="Build, compare, cache, and host versioned Swift-DocC documentation.",
+    )
+    parser.add_argument("--version", action="version", version=VERSION)
+    subparsers = parser.add_subparsers(dest="command")
+    build = subparsers.add_parser("build", help="Build cache misses and assemble the site")
+    build.add_argument("--package-path", default=".")
+    build.add_argument("--config", default="VersionedDocC.json")
+    build.add_argument("--output")
+    build.add_argument("--cache")
+    build.add_argument("--build-date")
+    build.add_argument("--assemble-only", action="store_true")
+    build.add_argument("--rebuild", action="store_true")
+    build.add_argument("--preview-port", type=int, default=8766)
+    preview = subparsers.add_parser("preview", help="Serve an assembled site with wildcard redirects")
+    preview.add_argument("--package-path", default=".")
+    preview.add_argument("--config", default="VersionedDocC.json")
+    preview.add_argument("--output")
+    preview.add_argument("--bind", default="127.0.0.1")
+    preview.add_argument("--port", type=int, default=8766)
+    arguments = parser.parse_args()
+    if arguments.command is None:
+        arguments = parser.parse_args(["build", *sys.argv[1:]])
+    return arguments
+
+
+def main():
+    arguments = parse_arguments()
+    if arguments.command == "preview":
+        preview_command(arguments)
+    else:
+        build_command(arguments)
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except (VersionedDocCError, OSError, json.JSONDecodeError) as error:
+        print(f"error: {error}", file=sys.stderr)
+        raise SystemExit(1)

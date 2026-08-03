@@ -1,0 +1,78 @@
+<style>
+  :host {
+    --versioned-docc-background: rgba(255, 255, 255, 0.92);
+    --versioned-docc-border: rgba(0, 0, 0, 0.12);
+    --versioned-docc-primary: #1d1d1f;
+    --versioned-docc-secondary: #6e6e73;
+    display: block;
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif;
+  }
+  :host([data-color-scheme="dark"]) {
+    --versioned-docc-background: rgba(29, 29, 31, 0.92);
+    --versioned-docc-border: rgba(255, 255, 255, 0.18);
+    --versioned-docc-primary: #f5f5f7;
+    --versioned-docc-secondary: #a1a1a6;
+  }
+  .versioned-docc-header {
+    align-items: center;
+    backdrop-filter: saturate(180%) blur(18px);
+    background: var(--versioned-docc-background);
+    border-bottom: 1px solid var(--versioned-docc-border);
+    color: var(--versioned-docc-primary);
+    display: flex;
+    gap: 24px;
+    justify-content: space-between;
+    min-height: 44px;
+    padding: 8px max(24px, calc((100vw - 1080px) / 2));
+  }
+  .versioned-docc-brand { align-items: baseline; display: flex; gap: 8px; min-width: 0; }
+  .versioned-docc-brand a { color: inherit; font-size: 14px; font-weight: 600; text-decoration: none; }
+  .versioned-docc-section, .versioned-docc-date, .versioned-docc-version span {
+    color: var(--versioned-docc-secondary); font-size: 12px;
+  }
+  .versioned-docc-metadata { align-items: center; display: flex; flex: none; gap: 14px; }
+  .versioned-docc-changes { color: #06c; font-size: 12px; font-weight: 500; text-decoration: none; }
+  .versioned-docc-version { align-items: center; display: flex; gap: 6px; }
+  .versioned-docc-header select {
+    appearance: auto;
+    background: transparent;
+    border: 1px solid var(--versioned-docc-border);
+    border-radius: 6px;
+    color: var(--versioned-docc-primary);
+    font: inherit;
+    font-size: 12px;
+    min-width: 112px;
+    padding: 4px 7px;
+  }
+  @media (prefers-color-scheme: dark) {
+    :host([data-color-scheme="auto"]) {
+      --versioned-docc-background: rgba(29, 29, 31, 0.92);
+      --versioned-docc-border: rgba(255, 255, 255, 0.18);
+      --versioned-docc-primary: #f5f5f7;
+      --versioned-docc-secondary: #a1a1a6;
+    }
+  }
+  @media (max-width: 680px) {
+    .versioned-docc-header { align-items: flex-start; flex-direction: column; gap: 7px; padding: 9px 16px; }
+    .versioned-docc-metadata { justify-content: space-between; width: 100%; }
+  }
+</style>
+<header class="versioned-docc-header">
+  <div class="versioned-docc-brand">
+    <a href="__VERSIONED_DOCC_HOME_PATH__">__VERSIONED_DOCC_PROJECT_NAME__</a>
+    <span class="versioned-docc-section">Documentation</span>
+  </div>
+  <div class="versioned-docc-metadata">
+    <time class="versioned-docc-date" datetime="__VERSIONED_DOCC_BUILD_DATE__">Built __VERSIONED_DOCC_BUILD_DATE__</time>
+    <a class="versioned-docc-changes" href="__VERSIONED_DOCC_CHANGES_PATH__">API Changes</a>
+    <label class="versioned-docc-version">
+      <span>Version</span>
+      <select
+        aria-label="Documentation version"
+        onchange="if (this.value) window.location.assign(window.location.pathname.replace('/__VERSIONED_DOCC_CURRENT_VERSION__/', '/' + this.value + '/') + window.location.search + window.location.hash)"
+      >
+__VERSIONED_DOCC_VERSION_OPTIONS__
+      </select>
+    </label>
+  </div>
+</header>

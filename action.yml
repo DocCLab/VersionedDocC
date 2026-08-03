@@ -1,0 +1,46 @@
+name: VersionedDocC
+description: Build and assemble cached, versioned Swift-DocC documentation
+inputs:
+  config:
+    description: Configuration path relative to package-path
+    required: false
+    default: VersionedDocC.json
+  package-path:
+    description: Swift package root
+    required: false
+    default: .
+  output:
+    description: Optional output-path override
+    required: false
+    default: ""
+  cache:
+    description: Optional cache-path override
+    required: false
+    default: ""
+runs:
+  using: composite
+  steps:
+    - name: Build versioned documentation
+      shell: bash
+      env:
+        VERSIONED_DOCC_CONFIG: ${{ inputs.config }}
+        VERSIONED_DOCC_PACKAGE_PATH: ${{ inputs.package-path }}
+        VERSIONED_DOCC_OUTPUT: ${{ inputs.output }}
+        VERSIONED_DOCC_CACHE: ${{ inputs.cache }}
+      run: |
+        set -euo pipefail
+        arguments=(
+          build
+          --package-path "$VERSIONED_DOCC_PACKAGE_PATH"
+          --config "$VERSIONED_DOCC_CONFIG"
+        )
+        if [[ -n "$VERSIONED_DOCC_OUTPUT" ]]; then
+          arguments+=(--output "$VERSIONED_DOCC_OUTPUT")
+        fi
+        if [[ -n "$VERSIONED_DOCC_CACHE" ]]; then
+          arguments+=(--cache "$VERSIONED_DOCC_CACHE")
+        fi
+        swift run \
+          --package-path "$GITHUB_ACTION_PATH" \
+          versioned-docc \
+          "${arguments[@]}"
