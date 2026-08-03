@@ -80,7 +80,8 @@ Add VersionedDocC as a direct package dependency:
 Build and assemble the site:
 
 ```shell
-swift package --allow-writing-to-package-directory \
+swift package --disable-sandbox \
+  --allow-writing-to-package-directory \
   --allow-network-connections all \
   versioned-documentation build \
   --config VersionedDocC.json
@@ -89,11 +90,19 @@ swift package --allow-writing-to-package-directory \
 Serve the result with the configured wildcard redirect:
 
 ```shell
-swift package --allow-writing-to-package-directory \
+swift package --disable-sandbox \
+  --allow-writing-to-package-directory \
+  --allow-network-connections all \
   versioned-documentation preview \
   --config VersionedDocC.json \
   --port 8766
 ```
+
+The outer SwiftPM sandbox must be disabled because `build` starts nested
+SwiftPM builds (which may access system credential and artifact caches) and
+`preview` binds a local server socket. VersionedDocC still uses isolated
+checkouts and bounds all cache/output removal to configured child directories.
+SwiftPM continues to require the declared write and network grants explicitly.
 
 The standalone executable accepts the same commands:
 
