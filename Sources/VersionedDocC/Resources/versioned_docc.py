@@ -232,8 +232,26 @@ class PreparedSource:
         self.version = version
         self.commit = commit
         self.root = None
-        self.worktrees = []
         self.temporary_root = None
+
+    @staticmethod
+    def clone_at_revision(repository, destination, revision):
+        # A command plugin may read the package's Git repository, but it can't
+        # update the canonical repository's .git/worktrees directory. A shared
+        # clone keeps all mutable Git state in the temporary directory while
+        # reusing the source repository's object database read-only.
+        run(
+            [
+                "git",
+                "clone",
+                "--quiet",
+                "--shared",
+                "--no-checkout",
+                str(repository),
+                str(destination),
+            ]
+        )
+        run(["git", "-C", str(destination), "checkout", "--quiet", "--detach", revision])
 
     def __enter__(self):
         dependencies = self.config.get("localDependencies", {})
@@ -246,8 +264,7 @@ class PreparedSource:
             tempfile.mkdtemp(prefix=f"versioned-docc-{self.version['name']}-")
         )
         self.root = self.temporary_root / self.package_root.name
-        run(["git", "-C", str(self.package_root), "worktree", "add", "--detach", str(self.root), self.commit])
-        self.worktrees.append((self.package_root, self.root))
+        self.clone_at_revision(self.package_root, self.root, self.commit)
         if not dependencies:
             return self.root
 
@@ -273,17 +290,10 @@ class PreparedSource:
                 print(f"Fetching {identity} revision {revision}")
                 run(["git", "-C", str(repository), "fetch", "origin", revision])
             destination = self.temporary_root / repository.name
-            run(["git", "-C", str(repository), "worktree", "add", "--detach", str(destination), revision])
-            self.worktrees.append((repository, destination))
+            self.clone_at_revision(repository, destination, revision)
         return self.root
 
     def __exit__(self, exc_type, exc_value, traceback):
-        for repository, worktree in reversed(self.worktrees):
-            subprocess.run(
-                ["git", "-C", str(repository), "worktree", "remove", "--force", str(worktree)],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
         if self.temporary_root and self.temporary_root.exists():
             shutil.rmtree(self.temporary_root, ignore_errors=True)
 

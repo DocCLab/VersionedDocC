@@ -1,5 +1,6 @@
 import importlib.util
 import json
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -20,6 +21,54 @@ api_changes = load_module("api_changes")
 
 
 class VersionedDocCTests(unittest.TestCase):
+    def test_prepared_source_uses_clones_without_registering_worktrees(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            dependency = root / "Dependency"
+            package = root / "Package"
+            for repository in (dependency, package):
+                subprocess.run(["git", "init", "-q", str(repository)], check=True)
+                subprocess.run(
+                    ["git", "-C", str(repository), "config", "user.email", "test@example.com"],
+                    check=True,
+                )
+                subprocess.run(
+                    ["git", "-C", str(repository), "config", "user.name", "VersionedDocC Tests"],
+                    check=True,
+                )
+
+            (dependency / "Dependency.swift").write_text("public struct Dependency {}\n")
+            subprocess.run(["git", "-C", str(dependency), "add", "."], check=True)
+            subprocess.run(["git", "-C", str(dependency), "commit", "-qm", "Initial"], check=True)
+            dependency_revision = versioned_docc.git(dependency, "rev-parse", "HEAD")
+
+            (package / "Package.resolved").write_text(
+                json.dumps(
+                    {
+                        "pins": [
+                            {
+                                "identity": "dependency",
+                                "state": {"revision": dependency_revision},
+                            }
+                        ]
+                    }
+                )
+            )
+            (package / "Package.swift").write_text("// fixture\n")
+            subprocess.run(["git", "-C", str(package), "add", "."], check=True)
+            subprocess.run(["git", "-C", str(package), "commit", "-qm", "Initial"], check=True)
+            package_revision = versioned_docc.git(package, "rev-parse", "HEAD")
+            before = versioned_docc.git(package, "worktree", "list", "--porcelain")
+
+            config = {"localDependencies": {"dependency": str(dependency)}}
+            version = {"name": "fixture", "ref": package_revision}
+            with versioned_docc.PreparedSource(package, config, version, package_revision) as source:
+                self.assertTrue((source / ".git").is_dir())
+                self.assertTrue((source.parent / "Dependency" / "Dependency.swift").is_file())
+
+            after = versioned_docc.git(package, "worktree", "list", "--porcelain")
+            self.assertEqual(before, after)
+
     def test_protocol_extension_diff_has_one_canonical_addition(self):
         canonical = {
             "P.accentColor": {
