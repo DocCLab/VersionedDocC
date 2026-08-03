@@ -95,7 +95,7 @@ swift package --allow-writing-to-package-directory \
 The standalone executable accepts the same commands:
 
 ```shell
-swift run versioned-docc build --package-path /path/to/package
+swift run VersionedDocC build --package-path /path/to/package
 ```
 
 ## GitHub Actions

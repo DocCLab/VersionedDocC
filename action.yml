@@ -42,5 +42,5 @@ runs:
         fi
         swift run \
           --package-path "$GITHUB_ACTION_PATH" \
-          versioned-docc \
+          VersionedDocC \
           "${arguments[@]}"

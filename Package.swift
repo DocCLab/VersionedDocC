@@ -8,7 +8,7 @@ let package = Package(
         .macOS(.v13),
     ],
     products: [
-        .executable(name: "versioned-docc", targets: ["VersionedDocC"]),
+        .executable(name: "VersionedDocC", targets: ["VersionedDocC"]),
         .plugin(name: "VersionedDocCPlugin", targets: ["VersionedDocCPlugin"]),
     ],
     targets: [
@@ -29,7 +29,7 @@ let package = Package(
                     ),
                 ]
             ),
-            dependencies: ["VersionedDocC"]
+            dependencies: [.target(name: "VersionedDocC")]
         ),
     ]
 )

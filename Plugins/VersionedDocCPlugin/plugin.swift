@@ -15,7 +15,7 @@ enum PluginError: Error, CustomStringConvertible {
 @main
 struct VersionedDocCPlugin: CommandPlugin {
     func performCommand(context: PluginContext, arguments: [String]) async throws {
-        let tool = try context.tool(named: "versioned-docc")
+        let tool = try context.tool(named: "VersionedDocC")
         let process = Process()
         process.executableURL = tool.url
         process.arguments = arguments

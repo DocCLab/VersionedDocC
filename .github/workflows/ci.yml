@@ -10,5 +10,5 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - run: swift build
-      - run: swift run versioned-docc --version
+      - run: swift run VersionedDocC --version
       - run: python3 -m unittest discover -s Tests -p 'test_*.py'
