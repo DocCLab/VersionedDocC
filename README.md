@@ -81,6 +81,7 @@ Build and assemble the site:
 
 ```shell
 swift package --allow-writing-to-package-directory \
+  --allow-network-connections all \
   versioned-documentation build \
   --config VersionedDocC.json
 ```

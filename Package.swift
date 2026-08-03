@@ -27,6 +27,10 @@ let package = Package(
                     .writeToPackageDirectory(
                         reason: "Write versioned documentation artifacts and caches"
                     ),
+                    .allowNetworkConnections(
+                        scope: .all(),
+                        reason: "Resolve dependencies for isolated historical package builds"
+                    ),
                 ]
             ),
             dependencies: [.target(name: "VersionedDocC")]
