@@ -25,6 +25,28 @@ and `docc` executables. It does not fork Swift-DocC or Swift-DocC Render.
 - A SwiftPM command plugin, standalone executable, composite GitHub Action,
   and reusable Pages workflow.
 
+## Examples
+
+- **ScreenShieldKit:** [GitHub repository](https://github.com/Kyle-Ye/ScreenShieldKit)
+  · [Live versioned documentation](https://kyle-ye.github.io/ScreenShieldKit/main/)
+
+## Agent skill
+
+This repository includes an
+[`adopt-versioned-docc`](skills/adopt-versioned-docc/SKILL.md) skill for
+Codex and other Agent Skills-compatible tools. Install or copy the skill
+directory into your agent's skill location, then ask it to adapt an existing
+Swift package:
+
+```text
+Use $adopt-versioned-docc to add versioned, multi-platform DocC publishing to
+this Swift package.
+```
+
+The skill inspects the package, release tags, DocC catalog, supported platforms,
+and existing CI before generating `.vdc.json` and a publishing workflow. It also
+guides local validation, Pages verification, and optional GHCR cache setup.
+
 ## Configuration
 
 Add `.vdc.json` to the package root:

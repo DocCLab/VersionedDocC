@@ -1,0 +1,4 @@
+interface:
+  display_name: "Adopt VersionedDocC"
+  short_description: "Add versioned Swift-DocC publishing to a package"
+  default_prompt: "Use $adopt-versioned-docc to add versioned, multi-platform DocC publishing to this Swift package."
