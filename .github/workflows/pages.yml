@@ -6,7 +6,7 @@ on:
       config:
         description: VersionedDocC configuration path
         required: false
-        default: VersionedDocC.json
+        default: .vdc.json
         type: string
       artifact-path:
         description: Static website root uploaded to Pages

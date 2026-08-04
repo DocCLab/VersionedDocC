@@ -422,7 +422,7 @@ class VersionedDocCTests(unittest.TestCase):
         }
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            path = root / "VersionedDocC.json"
+            path = root / ".vdc.json"
             path.write_text(json.dumps(config), encoding="utf-8")
             loaded, _ = versioned_docc.load_config(root, path)
             self.assertEqual(loaded["apiChanges"]["pageSize"], 10)
@@ -431,6 +431,19 @@ class VersionedDocCTests(unittest.TestCase):
             path.write_text(json.dumps(config), encoding="utf-8")
             loaded, _ = versioned_docc.load_config(root, path)
             self.assertEqual(loaded["apiChanges"]["pageSize"], 25)
+
+    def test_default_configuration_filename_is_vdc_json(self):
+        with mock.patch.object(
+            versioned_docc.sys, "argv", ["versioned-docc", "build"]
+        ):
+            build = versioned_docc.parse_arguments()
+        with mock.patch.object(
+            versioned_docc.sys, "argv", ["versioned-docc", "preview"]
+        ):
+            preview = versioned_docc.parse_arguments()
+
+        self.assertEqual(build.config, ".vdc.json")
+        self.assertEqual(preview.config, ".vdc.json")
 
     def test_filter_symbol_graph_removes_external_modules(self):
         graph = {

@@ -27,7 +27,7 @@ and `docc` executables. It does not fork Swift-DocC or Swift-DocC Render.
 
 ## Configuration
 
-Add `VersionedDocC.json` to the package root:
+Add `.vdc.json` to the package root:
 
 ```json
 {
@@ -58,6 +58,10 @@ Add `VersionedDocC.json` to the package root:
   }
 }
 ```
+
+The CLI, SwiftPM plugin, composite action, and reusable workflow discover this
+file automatically. Use `--config` or the `config` action input only for a
+nonstandard path.
 
 `latest` follows the newest semantic-version Git tags automatically. `pinned`
 adds stable comparison baselines without duplicating a version already selected
@@ -101,7 +105,7 @@ swift package --disable-sandbox \
   --allow-writing-to-package-directory \
   --allow-network-connections all \
   versioned-documentation build \
-  --config VersionedDocC.json
+  --config .vdc.json
 ```
 
 Serve the result with the configured wildcard redirect:
@@ -111,7 +115,7 @@ swift package --disable-sandbox \
   --allow-writing-to-package-directory \
   --allow-network-connections all \
   versioned-documentation preview \
-  --config VersionedDocC.json \
+  --config .vdc.json \
   --port 8766
 ```
 
@@ -183,7 +187,7 @@ history:
 - run: echo "${{ github.token }}" | oras login ghcr.io --username "${{ github.actor }}" --password-stdin
 - uses: OpenSwiftUIProject/VersionedDocC@0.0.5
   with:
-    config: VersionedDocC.json
+    config: .vdc.json
     publish-oci-cache: true
 ```
 
@@ -194,7 +198,7 @@ jobs:
   documentation:
     uses: OpenSwiftUIProject/VersionedDocC/.github/workflows/pages.yml@0.0.5
     with:
-      config: VersionedDocC.json
+      config: .vdc.json
       artifact-path: .docs/build/versioned-site
       deploy: true
       publish-oci-cache: true

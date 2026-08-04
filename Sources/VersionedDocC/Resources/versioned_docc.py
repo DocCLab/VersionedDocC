@@ -19,6 +19,7 @@ from pathlib import Path
 
 
 VERSION = "0.0.5"
+DEFAULT_CONFIG = ".vdc.json"
 # Keep this stable across releases that only change assembly, routing, or the
 # command interface. Bump it only when the per-version DocC cache contents must
 # be regenerated. Its initial value preserves 0.0.1 cache fingerprints.
@@ -1186,7 +1187,7 @@ def parse_arguments():
     subparsers = parser.add_subparsers(dest="command")
     build = subparsers.add_parser("build", help="Build cache misses and assemble the site")
     build.add_argument("--package-path", default=".")
-    build.add_argument("--config", default="VersionedDocC.json")
+    build.add_argument("--config", default=DEFAULT_CONFIG)
     build.add_argument("--output")
     build.add_argument("--cache")
     build.add_argument("--build-date")
@@ -1205,7 +1206,7 @@ def parse_arguments():
     build.add_argument("--preview-port", type=int, default=8766)
     preview = subparsers.add_parser("preview", help="Serve an assembled site with wildcard redirects")
     preview.add_argument("--package-path", default=".")
-    preview.add_argument("--config", default="VersionedDocC.json")
+    preview.add_argument("--config", default=DEFAULT_CONFIG)
     preview.add_argument("--output")
     preview.add_argument("--bind", default="127.0.0.1")
     preview.add_argument("--port", type=int, default=8766)

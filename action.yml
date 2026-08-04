@@ -4,7 +4,7 @@ inputs:
   config:
     description: Configuration path relative to package-path
     required: false
-    default: VersionedDocC.json
+    default: .vdc.json
   package-path:
     description: Swift package root
     required: false
