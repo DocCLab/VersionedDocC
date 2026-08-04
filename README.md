@@ -31,7 +31,7 @@ Add `.vdc.json` to the package root:
 
 ```json
 {
-  "$schema": "https://raw.githubusercontent.com/OpenSwiftUIProject/VersionedDocC/0.0.7/Schema/VersionedDocC.schema.json",
+  "$schema": "https://raw.githubusercontent.com/OpenSwiftUIProject/VersionedDocC/0.0.8/Schema/VersionedDocC.schema.json",
   "schemaVersion": 1,
   "projectName": "ExampleKit",
   "moduleName": "ExampleKit",
@@ -76,10 +76,13 @@ The CLI, SwiftPM plugin, composite action, and reusable workflow discover this
 file automatically. Use `--config` or the `config` action input only for a
 nonstandard path.
 
-`latest` follows the newest semantic-version Git tags automatically. `pinned`
-adds stable comparison baselines without duplicating a version already selected
-by `latest`. The example currently publishes `main`, the newest release, and
-`0.19.0`; a new release tag replaces only the automatically selected version.
+`latest` follows the newest distinct `major.minor` release series automatically,
+using only the highest patch tag from each series. For example, `latest: 2`
+selects `0.20.1` and `0.19.3` instead of publishing `0.20.1` alongside `0.20.0`.
+`pinned` adds stable comparison baselines without duplicating a release series
+already selected by `latest`. An explicit `versions` array remains exact and is
+not grouped by release series. The example currently publishes `main`, the
+newest release series, and `0.19.0`.
 API Changes pages show 10 entries per page by default. Consumers can override
 the presentation-only value with `apiChanges.pageSize`; changing it reassembles
 the site without invalidating version documentation caches.
@@ -155,7 +158,7 @@ Add VersionedDocC as a direct package dependency:
 ```swift
 .package(
     url: "https://github.com/OpenSwiftUIProject/VersionedDocC.git",
-    exact: "0.0.7"
+    exact: "0.0.8"
 )
 ```
 
@@ -246,7 +249,7 @@ history:
     fetch-depth: 0
 - uses: oras-project/setup-oras@v1
 - run: echo "${{ github.token }}" | oras login ghcr.io --username "${{ github.actor }}" --password-stdin
-- uses: OpenSwiftUIProject/VersionedDocC@0.0.7
+- uses: OpenSwiftUIProject/VersionedDocC@0.0.8
   with:
     config: .vdc.json
     publish-oci-cache: true
@@ -257,7 +260,7 @@ OpenSwiftUIProject repositories can alternatively use the reusable workflow:
 ```yaml
 jobs:
   documentation:
-    uses: OpenSwiftUIProject/VersionedDocC/.github/workflows/pages.yml@0.0.7
+    uses: OpenSwiftUIProject/VersionedDocC/.github/workflows/pages.yml@0.0.8
     with:
       config: .vdc.json
       artifact-path: .docs/build/versioned-site

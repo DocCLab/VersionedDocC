@@ -18,7 +18,7 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 
-VERSION = "0.0.7"
+VERSION = "0.0.8"
 DEFAULT_CONFIG = ".vdc.json"
 # Keep this stable across releases that only change assembly, routing, or the
 # command interface. Bump it only when the per-version DocC cache contents must
@@ -275,9 +275,29 @@ def semantic_versions(repository, count):
     for tag in tags:
         match = SEMVER.match(tag)
         if match:
-            parsed.append((tuple(map(int, match.groups())), tag))
+            version = tuple(map(int, match.groups()))
+            tag_without_build_metadata = tag.lstrip("v").split("+", 1)[0]
+            is_stable = "-" not in tag_without_build_metadata
+            parsed.append((version, is_stable, tag))
     parsed.sort(reverse=True)
-    return [tag for _, tag in parsed[:count]]
+    selected = []
+    selected_series = set()
+    for version, _, tag in parsed:
+        series = version[:2]
+        if series in selected_series:
+            continue
+        selected.append(tag)
+        selected_series.add(series)
+        if len(selected) == count:
+            break
+    return selected
+
+
+def semantic_version_series(tag):
+    match = SEMVER.fullmatch(tag)
+    if not match:
+        return None
+    return tuple(map(int, match.groups()[:2]))
 
 
 def configured_versions(repository, config):
@@ -288,13 +308,14 @@ def configured_versions(repository, config):
         development = policy.get("development", {"name": "main", "ref": "HEAD"})
         versions = [development]
         selected_tags = semantic_versions(repository, int(policy.get("latest", 2)))
-        selected_names = {tag.lstrip("v") for tag in selected_tags}
+        selected_series = {semantic_version_series(tag) for tag in selected_tags}
         for tag in policy.get("pinned", []):
             if not isinstance(tag, str) or not SEMVER.fullmatch(tag):
                 raise VersionedDocCError(f"invalid pinned release: {tag}")
-            if tag.lstrip("v") not in selected_names:
+            series = semantic_version_series(tag)
+            if series not in selected_series:
                 selected_tags.append(tag)
-                selected_names.add(tag.lstrip("v"))
+                selected_series.add(series)
         versions.extend(
             {"name": tag.lstrip("v"), "ref": tag}
             for tag in selected_tags

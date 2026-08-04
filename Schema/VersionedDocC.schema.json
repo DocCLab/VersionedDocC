@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://raw.githubusercontent.com/OpenSwiftUIProject/VersionedDocC/0.0.7/Schema/VersionedDocC.schema.json",
+  "$id": "https://raw.githubusercontent.com/OpenSwiftUIProject/VersionedDocC/0.0.8/Schema/VersionedDocC.schema.json",
   "title": "VersionedDocC configuration",
   "type": "object",
   "required": [
@@ -42,7 +42,12 @@
     "releasePolicy": {
       "type": "object",
       "properties": {
-        "latest": { "type": "integer", "minimum": 1, "default": 2 },
+        "latest": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 2,
+          "description": "Number of distinct major.minor release series to publish; only the highest patch tag from each series is selected."
+        },
         "development": {
           "type": "object",
           "properties": {

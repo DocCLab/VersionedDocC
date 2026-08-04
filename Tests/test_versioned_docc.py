@@ -180,12 +180,28 @@ class VersionedDocCTests(unittest.TestCase):
             ],
         )
 
-    def test_release_policy_deduplicates_latest_pinned_version(self):
+    def test_semantic_versions_selects_latest_patch_from_each_release_series(self):
+        tags = "\n".join(
+            ["0.1.0", "0.2.0", "0.1.1", "0.2.1", "not-a-version"]
+        )
+        with mock.patch.object(versioned_docc, "git", return_value=tags):
+            versions = versioned_docc.semantic_versions(Path("/unused"), 2)
+
+        self.assertEqual(versions, ["0.2.1", "0.1.1"])
+
+    def test_semantic_versions_prefers_stable_tag_for_same_patch(self):
+        tags = "\n".join(["0.1.0", "0.2.1-beta.1", "0.2.1"])
+        with mock.patch.object(versioned_docc, "git", return_value=tags):
+            versions = versioned_docc.semantic_versions(Path("/unused"), 2)
+
+        self.assertEqual(versions, ["0.2.1", "0.1.0"])
+
+    def test_release_policy_deduplicates_latest_pinned_release_series(self):
         config = {
             "defaultVersion": "main",
             "releasePolicy": {
                 "latest": 1,
-                "pinned": ["0.20.1"],
+                "pinned": ["0.20.0"],
             },
         }
         with mock.patch.object(versioned_docc, "semantic_versions", return_value=["0.20.1"]):
