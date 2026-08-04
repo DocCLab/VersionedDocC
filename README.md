@@ -31,7 +31,7 @@ Add `.vdc.json` to the package root:
 
 ```json
 {
-  "$schema": "https://raw.githubusercontent.com/OpenSwiftUIProject/VersionedDocC/0.0.6/Schema/VersionedDocC.schema.json",
+  "$schema": "https://raw.githubusercontent.com/OpenSwiftUIProject/VersionedDocC/0.0.7/Schema/VersionedDocC.schema.json",
   "schemaVersion": 1,
   "projectName": "ExampleKit",
   "moduleName": "ExampleKit",
@@ -127,6 +127,27 @@ revisions recorded in the selected source tag's `Package.resolved` file.
 Nested SwiftPM builds disable their own sandbox because the command plugin is
 already constrained by SwiftPM's outer sandbox.
 
+Packages that added a DocC catalog after earlier releases can opt into a
+one-time historical fallback:
+
+```json
+"historicalCatalogFallback": "current"
+```
+
+On a release cache miss, VersionedDocC uses the current checkout's catalog when
+the selected tag has none and records the fallback source commit in cache
+metadata. The catalog contents intentionally do not invalidate that release
+after its cache is published; later current-catalog edits rebuild development
+documentation only. If every local and OCI copy is deleted, rebuilding the old
+tag uses the then-current catalog again.
+
+API Changes includes both the module's primary symbol graph and extension
+graphs such as `Module@UIKit.symbols.json`. Add externally extended module names
+to `allowedModules` when their generated documentation routes must remain in the
+assembled site. Set `symbolGraph.emitExtensionBlocks` to `true` for packages
+whose public surface extends types from other modules; this mirrors SwiftPM's
+DocC symbol extraction mode and gives DocC a local extension symbol to render.
+
 ## SwiftPM plugin
 
 Add VersionedDocC as a direct package dependency:
@@ -134,7 +155,7 @@ Add VersionedDocC as a direct package dependency:
 ```swift
 .package(
     url: "https://github.com/OpenSwiftUIProject/VersionedDocC.git",
-    exact: "0.0.6"
+    exact: "0.0.7"
 )
 ```
 
@@ -225,7 +246,7 @@ history:
     fetch-depth: 0
 - uses: oras-project/setup-oras@v1
 - run: echo "${{ github.token }}" | oras login ghcr.io --username "${{ github.actor }}" --password-stdin
-- uses: OpenSwiftUIProject/VersionedDocC@0.0.6
+- uses: OpenSwiftUIProject/VersionedDocC@0.0.7
   with:
     config: .vdc.json
     publish-oci-cache: true
@@ -236,7 +257,7 @@ OpenSwiftUIProject repositories can alternatively use the reusable workflow:
 ```yaml
 jobs:
   documentation:
-    uses: OpenSwiftUIProject/VersionedDocC/.github/workflows/pages.yml@0.0.6
+    uses: OpenSwiftUIProject/VersionedDocC/.github/workflows/pages.yml@0.0.7
     with:
       config: .vdc.json
       artifact-path: .docs/build/versioned-site
@@ -252,7 +273,9 @@ Each version cache is self-contained:
 .docs/cache/versioned-docc/<version>/
 ├── metadata.json
 ├── site/
-└── symbols/<Module>.symbols.json
+└── symbols/
+    ├── <Module>.symbols.json
+    └── <Module>@<ExtendedModule>.symbols.json
 ```
 
 Adding a release builds only a cache miss. Updating the published version list

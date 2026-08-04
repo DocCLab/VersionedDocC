@@ -18,7 +18,7 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 
-VERSION = "0.0.6"
+VERSION = "0.0.7"
 DEFAULT_CONFIG = ".vdc.json"
 # Keep this stable across releases that only change assembly, routing, or the
 # command interface. Bump it only when the per-version DocC cache contents must
@@ -149,12 +149,23 @@ def load_config(package_root, config_path):
     config.setdefault("environment", {})
     config.setdefault("localDependencies", {})
     config.setdefault("allowedModules", [config["moduleName"]])
+    historical_catalog_fallback = config.get("historicalCatalogFallback")
+    if historical_catalog_fallback not in (None, "current"):
+        raise VersionedDocCError(
+            "historicalCatalogFallback must be current when configured"
+        )
     config.setdefault("symbolGraph", {})
     symbol_graph = config["symbolGraph"]
     if not isinstance(symbol_graph, dict):
         raise VersionedDocCError("symbolGraph must be an object")
     symbol_graph.setdefault("minimumAccessLevel", "public")
     symbol_graph.setdefault("skipProtocolImplementations", True)
+    if "emitExtensionBlocks" in symbol_graph and not isinstance(
+        symbol_graph["emitExtensionBlocks"], bool
+    ):
+        raise VersionedDocCError(
+            "symbolGraph.emitExtensionBlocks must be a boolean"
+        )
     platforms = symbol_graph.get("platforms")
     if platforms is not None:
         if not isinstance(platforms, list) or not platforms:
@@ -253,7 +264,9 @@ def resolve_platform_sdk(platform):
 
 
 def module_symbol_graph_paths(symbols_root, module_name):
-    return sorted(symbols_root.rglob(f"{module_name}.symbols.json"))
+    paths = set(symbols_root.rglob(f"{module_name}.symbols.json"))
+    paths.update(symbols_root.rglob(f"{module_name}@*.symbols.json"))
+    return sorted(paths)
 
 
 def semantic_versions(repository, count):
@@ -495,6 +508,7 @@ def build_fingerprint(config, docc_binary, header_template):
         "doccArguments": config["doccArguments"],
         "symbolGraph": config["symbolGraph"],
         "allowedModules": config["allowedModules"],
+        "historicalCatalogFallback": config.get("historicalCatalogFallback"),
     }
     return sha256_bytes(json.dumps(payload, sort_keys=True).encode())
 
@@ -819,6 +833,10 @@ def build_version(
                     "-Xswiftc",
                     config["symbolGraph"]["minimumAccessLevel"],
                 ]
+                if config["symbolGraph"].get("emitExtensionBlocks", False):
+                    build_command.extend(
+                        ["-Xswiftc", "-emit-extension-block-symbols"]
+                    )
                 if config["symbolGraph"].get("skipProtocolImplementations", True):
                     # Force the symbol-graph option through SwiftPM's driver. Passing
                     # it as a plain Swift driver option doesn't reach the frontend
@@ -844,8 +862,26 @@ def build_version(
                 retain_symbol_graph_module(graph_directory, config["moduleName"])
 
             source_catalog = source_root / config["catalogPath"]
+            catalog_fallback_source_commit = None
             if not source_catalog.is_dir():
-                raise VersionedDocCError(f"missing DocC catalog: {source_catalog}")
+                fallback_catalog = package_root / config["catalogPath"]
+                if (
+                    config.get("historicalCatalogFallback") == "current"
+                    and fallback_catalog.is_dir()
+                    and fallback_catalog.resolve() != source_catalog.resolve()
+                ):
+                    source_catalog = fallback_catalog
+                    catalog_fallback_source_commit = git(
+                        package_root, "rev-parse", "HEAD"
+                    )
+                    print(
+                        f"{version['name']}: using current DocC catalog "
+                        f"({catalog_fallback_source_commit[:8]})"
+                    )
+                else:
+                    raise VersionedDocCError(
+                        f"missing DocC catalog: {source_catalog}"
+                    )
             catalog = staging / "catalog" / source_catalog.name
             shutil.copytree(source_catalog, catalog)
             (catalog / "header.html").write_text(
@@ -906,6 +942,8 @@ def build_version(
         if platforms
         else ["host"],
     }
+    if catalog_fallback_source_commit is not None:
+        metadata["catalogFallbackSourceCommit"] = catalog_fallback_source_commit
     (staging / "metadata.json").write_text(
         json.dumps(metadata, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )
@@ -959,13 +997,18 @@ def write_json(path, value):
     )
 
 
-def prune_site_to_module(site_root, module_path):
-    expected = module_path.casefold()
+def prune_site_to_module(site_root, module_path, allowed_module_paths=()):
+    expected = {
+        module.casefold() for module in (module_path, *allowed_module_paths)
+    }
     removed_entries = 0
 
     for root, keep_names in (
-        (site_root / "documentation", {expected}),
-        (site_root / "data" / "documentation", {expected, f"{expected}.json"}),
+        (site_root / "documentation", expected),
+        (
+            site_root / "data" / "documentation",
+            expected | {f"{module}.json" for module in expected},
+        ),
     ):
         if not root.is_dir():
             continue
@@ -983,13 +1026,16 @@ def prune_site_to_module(site_root, module_path):
     if index_path.is_file():
         with index_path.open(encoding="utf-8") as source:
             index = json.load(source)
-        expected_path = f"/documentation/{module_path}".casefold()
+        expected_paths = {
+            f"/documentation/{module}".casefold() for module in expected
+        }
         languages = index.get("interfaceLanguages", {})
         for language, modules in languages.items():
             languages[language] = [
                 module
                 for module in modules
-                if module.get("path", "").rstrip("/").casefold() == expected_path
+                if module.get("path", "").rstrip("/").casefold()
+                in expected_paths
             ]
         write_json(index_path, index)
 
@@ -1005,7 +1051,7 @@ def prune_site_to_module(site_root, module_path):
                     record.get("location", {}).get("reference", {}).get("url")
                 ))
                 is None
-                or module.casefold() == expected
+                or module.casefold() in expected
             )
         ]
         write_json(indexing_records_path, records)
@@ -1019,7 +1065,7 @@ def prune_site_to_module(site_root, module_path):
             for entity in entities
             if (
                 (module := documentation_module(entity.get("referenceURL"))) is None
-                or module.casefold() == expected
+                or module.casefold() in expected
             )
         ]
         write_json(linkable_entities_path, entities)
@@ -1113,7 +1159,11 @@ def assemble(package_root, config, versions, cache_root, output_path, build_date
         shutil.copytree(cache_entry / "site", version_output)
         # Assembly also sanitizes older local and OCI caches created before
         # dependency symbol graphs were excluded from DocC conversion.
-        prune_site_to_module(version_output, config["modulePath"])
+        prune_site_to_module(
+            version_output,
+            config["modulePath"],
+            config["allowedModules"],
+        )
         finalize_site(version_output, versions, version["name"])
     (output_path / "versions.json").write_text(
         json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8"

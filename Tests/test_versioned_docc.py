@@ -554,6 +554,7 @@ class VersionedDocCTests(unittest.TestCase):
                 {"name": "0.1.0", "ref": "0.1.0"},
             ],
             "symbolGraph": {
+                "emitExtensionBlocks": True,
                 "defaultPlatform": "iOS",
                 "platforms": [
                     {
@@ -579,6 +580,7 @@ class VersionedDocCTests(unittest.TestCase):
         platforms = loaded["symbolGraph"]["platforms"]
         self.assertEqual([platform["name"] for platform in platforms], ["iOS", "macOS"])
         self.assertEqual(platforms[0]["buildArguments"], [])
+        self.assertTrue(loaded["symbolGraph"]["emitExtensionBlocks"])
 
     def test_symbol_graph_default_platform_must_be_configured(self):
         config = {
@@ -606,6 +608,31 @@ class VersionedDocCTests(unittest.TestCase):
 
             with self.assertRaisesRegex(
                 versioned_docc.VersionedDocCError, "defaultPlatform"
+            ):
+                versioned_docc.load_config(root, path)
+
+    def test_historical_catalog_fallback_only_accepts_current(self):
+        config = {
+            "schemaVersion": 1,
+            "projectName": "DemoKit",
+            "moduleName": "DemoKit",
+            "targetName": "DemoKit",
+            "catalogPath": "Sources/DemoKit/DemoKit.docc",
+            "hostingBasePath": "/DemoKit",
+            "versions": [
+                {"name": "main", "ref": "HEAD"},
+                {"name": "0.1.0", "ref": "0.1.0"},
+            ],
+            "historicalCatalogFallback": "minimal",
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = root / ".vdc.json"
+            path.write_text(json.dumps(config), encoding="utf-8")
+
+            with self.assertRaisesRegex(
+                versioned_docc.VersionedDocCError,
+                "historicalCatalogFallback",
             ):
                 versioned_docc.load_config(root, path)
 
@@ -661,6 +688,24 @@ class VersionedDocCTests(unittest.TestCase):
             )
             self.assertFalse((root / "SwiftSyntax.symbols.json").exists())
 
+    def test_module_symbol_graph_paths_include_extension_graphs(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            platform = root / "00-ios"
+            platform.mkdir()
+            expected = [
+                platform / "ScreenShieldKit.symbols.json",
+                platform / "ScreenShieldKit@UIKit.symbols.json",
+            ]
+            for path in [*expected, platform / "SwiftSyntax.symbols.json"]:
+                path.write_text("{}\n", encoding="utf-8")
+
+            paths = versioned_docc.module_symbol_graph_paths(
+                root, "ScreenShieldKit"
+            )
+
+        self.assertEqual(paths, expected)
+
     def test_cache_validation_accepts_nested_platform_symbol_graphs(self):
         with tempfile.TemporaryDirectory() as directory:
             cache = Path(directory)
@@ -686,13 +731,15 @@ class VersionedDocCTests(unittest.TestCase):
             site = Path(directory)
             for path in (
                 site / "documentation" / "openswiftui" / "index.html",
+                site / "documentation" / "uikit" / "index.html",
                 site / "documentation" / "swiftsyntax" / "index.html",
                 site / "data" / "documentation" / "openswiftui" / "anchor.json",
+                site / "data" / "documentation" / "uikit" / "view.json",
                 site / "data" / "documentation" / "swiftsyntax" / "token.json",
             ):
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_text("fixture\n", encoding="utf-8")
-            for name in ("openswiftui.json", "swiftsyntax.json"):
+            for name in ("openswiftui.json", "uikit.json", "swiftsyntax.json"):
                 (site / "data" / "documentation" / name).write_text(
                     "{}\n", encoding="utf-8"
                 )
@@ -705,6 +752,7 @@ class VersionedDocCTests(unittest.TestCase):
                         "interfaceLanguages": {
                             "swift": [
                                 {"path": "/documentation/openswiftui"},
+                                {"path": "/documentation/uikit"},
                                 {"path": "/documentation/swiftsyntax"},
                             ]
                         }
@@ -717,6 +765,13 @@ class VersionedDocCTests(unittest.TestCase):
                     "location": {
                         "reference": {
                             "url": "doc://OpenSwiftUI/documentation/OpenSwiftUI/Anchor"
+                        }
+                    }
+                },
+                {
+                    "location": {
+                        "reference": {
+                            "url": "doc://OpenSwiftUI/documentation/UIKit/UIView"
                         }
                     }
                 },
@@ -741,6 +796,9 @@ class VersionedDocCTests(unittest.TestCase):
                     "referenceURL": "doc://OpenSwiftUI/documentation/OpenSwiftUI/Anchor"
                 },
                 {
+                    "referenceURL": "doc://OpenSwiftUI/documentation/UIKit/UIView"
+                },
+                {
                     "referenceURL": "doc://OpenSwiftUI/documentation/SwiftSyntax/Token"
                 },
             ]
@@ -748,25 +806,33 @@ class VersionedDocCTests(unittest.TestCase):
                 json.dumps(entities), encoding="utf-8"
             )
 
-            versioned_docc.prune_site_to_module(site, "openswiftui")
+            versioned_docc.prune_site_to_module(
+                site, "openswiftui", ["UIKit"]
+            )
 
             self.assertTrue((site / "documentation" / "openswiftui").is_dir())
+            self.assertTrue((site / "documentation" / "uikit").is_dir())
             self.assertFalse((site / "documentation" / "swiftsyntax").exists())
             self.assertTrue((site / "data" / "documentation" / "openswiftui").is_dir())
+            self.assertTrue((site / "data" / "documentation" / "uikit").is_dir())
             self.assertTrue((site / "data" / "documentation" / "openswiftui.json").is_file())
+            self.assertTrue((site / "data" / "documentation" / "uikit.json").is_file())
             self.assertFalse((site / "data" / "documentation" / "swiftsyntax").exists())
             self.assertFalse((site / "data" / "documentation" / "swiftsyntax.json").exists())
             self.assertEqual(
                 json.loads(index_path.read_text())["interfaceLanguages"]["swift"],
-                [{"path": "/documentation/openswiftui"}],
+                [
+                    {"path": "/documentation/openswiftui"},
+                    {"path": "/documentation/uikit"},
+                ],
             )
             self.assertEqual(
                 json.loads((site / "indexing-records.json").read_text()),
-                [indexing_records[0], indexing_records[2]],
+                [indexing_records[0], indexing_records[1], indexing_records[3]],
             )
             self.assertEqual(
                 json.loads((site / "linkable-entities.json").read_text()),
-                [entities[0]],
+                [entities[0], entities[1]],
             )
 
 
