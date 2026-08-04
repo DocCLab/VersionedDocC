@@ -17,6 +17,10 @@ inputs:
     description: Optional cache-path override
     required: false
     default: ""
+  publish-oci-cache:
+    description: Publish eligible immutable release caches to the configured OCI repository
+    required: false
+    default: "false"
 runs:
   using: composite
   steps:
@@ -27,6 +31,7 @@ runs:
         VERSIONED_DOCC_PACKAGE_PATH: ${{ inputs.package-path }}
         VERSIONED_DOCC_OUTPUT: ${{ inputs.output }}
         VERSIONED_DOCC_CACHE: ${{ inputs.cache }}
+        VERSIONED_DOCC_PUBLISH_OCI_CACHE: ${{ inputs.publish-oci-cache }}
       run: |
         set -euo pipefail
         arguments=(
@@ -40,6 +45,17 @@ runs:
         if [[ -n "$VERSIONED_DOCC_CACHE" ]]; then
           arguments+=(--cache "$VERSIONED_DOCC_CACHE")
         fi
+        case "$VERSIONED_DOCC_PUBLISH_OCI_CACHE" in
+          true|TRUE|1|yes|YES)
+            arguments+=(--publish-oci-cache)
+            ;;
+          false|FALSE|0|no|NO|"")
+            ;;
+          *)
+            echo "error: publish-oci-cache must be true or false" >&2
+            exit 2
+            ;;
+        esac
         swift run \
           --package-path "$GITHUB_ACTION_PATH" \
           VersionedDocC \

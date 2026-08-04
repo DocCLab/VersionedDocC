@@ -1,4 +1,5 @@
 import importlib.util
+import io
 import json
 import subprocess
 import tempfile
@@ -22,6 +23,137 @@ api_changes = load_module("api_changes")
 
 
 class VersionedDocCTests(unittest.TestCase):
+    def test_oci_cache_tag_is_content_specific(self):
+        version = {"name": "0.20.1", "ref": "0.20.1"}
+        first = versioned_docc.oci_cache_tag(version, "a" * 40, "b" * 64)
+
+        self.assertEqual(first, versioned_docc.oci_cache_tag(version, "a" * 40, "b" * 64))
+        self.assertNotEqual(first, versioned_docc.oci_cache_tag(version, "c" * 40, "b" * 64))
+        self.assertNotEqual(first, versioned_docc.oci_cache_tag(version, "a" * 40, "d" * 64))
+        self.assertRegex(first, r"^cache-0\.20\.1-[0-9a-f]{32}$")
+
+    def test_oci_cache_excludes_development_by_default(self):
+        config = {
+            "releasePolicy": {
+                "development": {"name": "main", "ref": "HEAD"},
+            },
+            "ociCache": {"repository": "ghcr.io/example/cache"},
+        }
+
+        self.assertFalse(
+            versioned_docc.uses_oci_cache(config, {"name": "main", "ref": "HEAD"})
+        )
+        self.assertTrue(
+            versioned_docc.uses_oci_cache(
+                config, {"name": "0.20.1", "ref": "0.20.1"}
+            )
+        )
+
+        config["ociCache"]["includeDevelopment"] = True
+        self.assertTrue(
+            versioned_docc.uses_oci_cache(config, {"name": "main", "ref": "HEAD"})
+        )
+
+    def test_oci_cache_archive_round_trip(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            cache_entry = root / "cache"
+            (cache_entry / "site").mkdir(parents=True)
+            (cache_entry / "symbols").mkdir()
+            (cache_entry / "metadata.json").write_text('{"schemaVersion": 1}\n')
+            (cache_entry / "site" / "index.html").write_text("<h1>Demo</h1>\n")
+            (cache_entry / "symbols" / "DemoKit.symbols.json").write_text("{}\n")
+            archive = root / "cache.tar.gz"
+            restored = root / "restored"
+
+            versioned_docc.create_cache_archive(cache_entry, archive)
+            versioned_docc.extract_cache_archive(archive, restored)
+
+            self.assertEqual(
+                (restored / "site" / "index.html").read_text(),
+                "<h1>Demo</h1>\n",
+            )
+            self.assertEqual(
+                (restored / "symbols" / "DemoKit.symbols.json").read_text(),
+                "{}\n",
+            )
+
+    def test_oci_cache_archive_rejects_path_traversal(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            archive_path = root / "malicious.tar.gz"
+            with versioned_docc.tarfile.open(archive_path, mode="w:gz") as archive:
+                information = versioned_docc.tarfile.TarInfo("../outside")
+                information.size = 4
+                archive.addfile(information, io.BytesIO(b"nope"))
+
+            with self.assertRaisesRegex(versioned_docc.VersionedDocCError, "unsafe OCI"):
+                versioned_docc.extract_cache_archive(archive_path, root / "restored")
+            self.assertFalse((root / "outside").exists())
+
+    def test_oci_cache_metadata_must_match_requested_build(self):
+        version = {"name": "0.20.1", "ref": "0.20.1"}
+        metadata = {
+            "version": "0.20.1",
+            "sourceCommit": "a" * 40,
+            "buildFingerprint": "b" * 64,
+        }
+        with mock.patch.object(versioned_docc, "run", return_value=json.dumps(metadata)):
+            restored = versioned_docc.validate_oci_metadata(
+                "oras",
+                "ghcr.io/example/cache",
+                "tag",
+                version,
+                "a" * 40,
+                "b" * 64,
+            )
+        self.assertEqual(restored, metadata)
+
+        metadata["sourceCommit"] = "c" * 40
+        with (
+            mock.patch.object(versioned_docc, "run", return_value=json.dumps(metadata)),
+            self.assertRaisesRegex(
+                versioned_docc.VersionedDocCError, "sourceCommit"
+            ),
+        ):
+            versioned_docc.validate_oci_metadata(
+                "oras",
+                "ghcr.io/example/cache",
+                "tag",
+                version,
+                "a" * 40,
+                "b" * 64,
+            )
+
+    def test_oci_cache_descriptor_must_use_versioned_docc_artifact_type(self):
+        descriptor = {
+            "artifactType": versioned_docc.OCI_ARTIFACT_TYPE,
+            "digest": "sha256:" + "a" * 64,
+        }
+        result = mock.Mock(
+            returncode=0,
+            stdout=json.dumps(descriptor),
+            stderr="",
+        )
+        with mock.patch.object(versioned_docc, "run_status", return_value=result):
+            self.assertTrue(
+                versioned_docc.oci_artifact_exists(
+                    "oras", "ghcr.io/example/cache", "tag"
+                )
+            )
+
+        descriptor["artifactType"] = "application/vnd.example.other"
+        result.stdout = json.dumps(descriptor)
+        with (
+            mock.patch.object(versioned_docc, "run_status", return_value=result),
+            self.assertRaisesRegex(
+                versioned_docc.VersionedDocCError, "unexpected OCI artifact type"
+            ),
+        ):
+            versioned_docc.oci_artifact_exists(
+                "oras", "ghcr.io/example/cache", "tag"
+            )
+
     def test_release_policy_combines_latest_and_pinned_versions(self):
         config = {
             "defaultVersion": "main",

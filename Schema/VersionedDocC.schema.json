@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://raw.githubusercontent.com/OpenSwiftUIProject/VersionedDocC/0.0.2/Schema/VersionedDocC.schema.json",
+  "$id": "https://raw.githubusercontent.com/OpenSwiftUIProject/VersionedDocC/0.0.3/Schema/VersionedDocC.schema.json",
   "title": "VersionedDocC configuration",
   "type": "object",
   "required": [
@@ -54,6 +54,16 @@
           "uniqueItems": true,
           "items": { "type": "string", "pattern": "^v?[0-9]+\\.[0-9]+\\.[0-9]+$" }
         }
+      },
+      "additionalProperties": false
+    },
+    "ociCache": {
+      "type": "object",
+      "required": ["repository"],
+      "properties": {
+        "repository": { "type": "string", "minLength": 1 },
+        "pull": { "type": "boolean", "default": true },
+        "includeDevelopment": { "type": "boolean", "default": false }
       },
       "additionalProperties": false
     },

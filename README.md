@@ -17,6 +17,8 @@ and `docc` executables. It does not fork Swift-DocC or Swift-DocC Render.
   members being repeated for every conforming type.
 - Immutable per-version caches with source, toolchain, renderer, and build
   configuration fingerprints.
+- Optional OCI release caches that restore and publish independent immutable
+  artifacts through ORAS-compatible registries such as GHCR.
 - Exact historical local dependencies from each tag's `Package.resolved`.
 - A single provider-style wildcard redirect plus a GitHub Pages `404.html`
   fallback from legacy documentation URLs to the configured default version.
@@ -29,7 +31,7 @@ Add `VersionedDocC.json` to the package root:
 
 ```json
 {
-  "$schema": "https://raw.githubusercontent.com/OpenSwiftUIProject/VersionedDocC/0.0.2/Schema/VersionedDocC.schema.json",
+  "$schema": "https://raw.githubusercontent.com/OpenSwiftUIProject/VersionedDocC/0.0.3/Schema/VersionedDocC.schema.json",
   "schemaVersion": 1,
   "projectName": "ExampleKit",
   "moduleName": "ExampleKit",
@@ -44,6 +46,9 @@ Add `VersionedDocC.json` to the package root:
     "development": { "name": "main", "ref": "HEAD" }
   },
   "sourceRepository": "https://github.com/Example/ExampleKit",
+  "ociCache": {
+    "repository": "ghcr.io/example/examplekit-docc-cache"
+  },
   "symbolGraph": {
     "minimumAccessLevel": "public",
     "skipProtocolImplementations": true
@@ -79,7 +84,7 @@ Add VersionedDocC as a direct package dependency:
 ```swift
 .package(
     url: "https://github.com/OpenSwiftUIProject/VersionedDocC.git",
-    exact: "0.0.2"
+    exact: "0.0.3"
 )
 ```
 
@@ -116,6 +121,34 @@ The standalone executable accepts the same commands:
 swift run VersionedDocC build --package-path /path/to/package
 ```
 
+## OCI release cache
+
+When `ociCache.repository` is configured, VersionedDocC attempts to restore a
+missing release cache before building it. Development documentation such as
+`main` stays in the local or GitHub Actions cache by default; set
+`includeDevelopment` only when every development commit should become an OCI
+artifact.
+
+OCI writes are always explicit:
+
+```shell
+swift run VersionedDocC build \
+  --package-path /path/to/package \
+  --publish-oci-cache
+```
+
+Each reference is derived from the version, exact source commit, and build
+fingerprint. The artifact contains a deterministic `tar.gz` layer and uses the
+media type `application/vnd.openswiftuiproject.versioned-docc.cache.v1`.
+VersionedDocC queries before pushing and skips an existing reference; restored
+metadata must match the requested source commit and fingerprint before it is
+accepted.
+
+Install the `oras` CLI and authenticate before using a remote registry. For
+GHCR in GitHub Actions, grant `packages: write` and log in with `GITHUB_TOKEN`.
+Use `--no-oci-cache` for an explicitly offline build. Set
+`VERSIONED_DOCC_ORAS` when the executable is not on `PATH`.
+
 ## Historical URL compatibility
 
 VersionedDocC emits two constant-size compatibility mechanisms:
@@ -140,9 +173,12 @@ history:
 - uses: actions/checkout@v7
   with:
     fetch-depth: 0
-- uses: OpenSwiftUIProject/VersionedDocC@0.0.2
+- uses: oras-project/setup-oras@v1
+- run: echo "${{ github.token }}" | oras login ghcr.io --username "${{ github.actor }}" --password-stdin
+- uses: OpenSwiftUIProject/VersionedDocC@0.0.3
   with:
     config: VersionedDocC.json
+    publish-oci-cache: true
 ```
 
 OpenSwiftUIProject repositories can alternatively use the reusable workflow:
@@ -150,11 +186,12 @@ OpenSwiftUIProject repositories can alternatively use the reusable workflow:
 ```yaml
 jobs:
   documentation:
-    uses: OpenSwiftUIProject/VersionedDocC/.github/workflows/pages.yml@0.0.2
+    uses: OpenSwiftUIProject/VersionedDocC/.github/workflows/pages.yml@0.0.3
     with:
       config: VersionedDocC.json
       artifact-path: .docs/build/versioned-site
       deploy: true
+      publish-oci-cache: true
 ```
 
 ## Artifact contract
@@ -179,11 +216,17 @@ The reusable workflow persists this directory with GitHub Actions cache. Its
 rolling key restores the previous site cache on a new tag, builds missing
 versions, then saves the expanded cache under the new commit key.
 
+With `ociCache` configured, release directories are also stored independently
+in the OCI repository. A new release downloads existing references, builds only
+the missing version, and publishes only a new immutable artifact. GitHub Actions
+cache remains the fast first-level cache for `main` and recent runs.
+
 ## Requirements
 
 - Swift 6.0 or newer.
 - Python 3.
 - Git and a Swift-DocC toolchain.
+- ORAS 1.2 or newer when `ociCache` is enabled.
 - macOS for packages whose documentation build requires Apple SDKs.
 
 ## License

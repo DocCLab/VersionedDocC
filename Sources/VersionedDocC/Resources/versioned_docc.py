@@ -2,6 +2,7 @@
 
 import argparse
 import datetime as dt
+import gzip
 import hashlib
 import html
 import json
@@ -10,19 +11,24 @@ import re
 import shutil
 import subprocess
 import sys
+import tarfile
 import tempfile
 from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 
-VERSION = "0.0.2"
+VERSION = "0.0.3"
 # Keep this stable across releases that only change assembly, routing, or the
 # command interface. Bump it only when the per-version DocC cache contents must
 # be regenerated. Its initial value preserves 0.0.1 cache fingerprints.
 BUILD_CACHE_REVISION = "0.0.1"
 SEMVER = re.compile(r"^v?(\d+)\.(\d+)\.(\d+)(?:[-+].*)?$")
 OPTIONS_TOKEN = "__VERSIONED_DOCC_VERSION_OPTIONS__"
+OCI_ARTIFACT_TYPE = "application/vnd.openswiftuiproject.versioned-docc.cache.v1"
+OCI_CONFIG_TYPE = "application/vnd.openswiftuiproject.versioned-docc.cache.config.v1+json"
+OCI_LAYER_TYPE = "application/vnd.openswiftuiproject.versioned-docc.cache.layer.v1.tar+gzip"
+OCI_ARCHIVE_NAME = "versioned-docc-cache.tar.gz"
 
 
 class VersionedDocCError(RuntimeError):
@@ -65,6 +71,19 @@ def run(command, cwd=None, environment=None, capture=False, log_path=None):
             + (f"\n{details}" if details else "")
         )
     return result.stdout.strip() if capture else ""
+
+
+def run_status(command, cwd=None, environment=None):
+    merged_environment = os.environ.copy()
+    if environment:
+        merged_environment.update({key: str(value) for key, value in environment.items()})
+    return subprocess.run(
+        command,
+        cwd=cwd,
+        env=merged_environment,
+        capture_output=True,
+        text=True,
+    )
 
 
 def git(repository, *arguments):
@@ -132,6 +151,19 @@ def load_config(package_root, config_path):
     config.setdefault("symbolGraph", {})
     config["symbolGraph"].setdefault("minimumAccessLevel", "public")
     config["symbolGraph"].setdefault("skipProtocolImplementations", True)
+    if "ociCache" in config:
+        oci_cache = config["ociCache"]
+        if not isinstance(oci_cache, dict) or not oci_cache.get("repository"):
+            raise VersionedDocCError("ociCache.repository is required")
+        repository = oci_cache["repository"].rstrip("/")
+        if repository.startswith("oci-layout://"):
+            if not repository.removeprefix("oci-layout://").startswith("/"):
+                raise VersionedDocCError("oci-layout repository must use an absolute path")
+        elif not re.fullmatch(r"[A-Za-z0-9._:-]+(?:/[A-Za-z0-9._-]+)+", repository):
+            raise VersionedDocCError(f"invalid OCI repository: {repository}")
+        oci_cache["repository"] = repository
+        oci_cache.setdefault("pull", True)
+        oci_cache.setdefault("includeDevelopment", False)
     return config, path
 
 
@@ -362,6 +394,242 @@ def cache_valid(cache_entry, commit, fingerprint, module_name):
     with metadata_path.open(encoding="utf-8") as source:
         metadata = json.load(source)
     return metadata.get("sourceCommit") == commit and metadata.get("buildFingerprint") == fingerprint
+
+
+def uses_oci_cache(config, version):
+    oci_cache = config.get("ociCache")
+    if not oci_cache:
+        return False
+    return oci_cache.get("includeDevelopment", False) or bool(
+        SEMVER.fullmatch(version["name"])
+    )
+
+
+def oci_cache_tag(version, commit, fingerprint):
+    identity = sha256_bytes(f"{version['name']}\0{commit}\0{fingerprint}".encode())[:32]
+    version_name = re.sub(r"[^A-Za-z0-9._-]", "-", version["name"])
+    return f"cache-{version_name[:80]}-{identity}"
+
+
+def oci_target(repository, tag):
+    if repository.startswith("oci-layout://"):
+        return ["--oci-layout"], f"{repository.removeprefix('oci-layout://')}:{tag}"
+    return [], f"{repository}:{tag}"
+
+
+def oci_reference(config, version, commit, fingerprint):
+    tag = oci_cache_tag(version, commit, fingerprint)
+    return f"{config['ociCache']['repository']}:{tag}"
+
+
+def find_oras():
+    configured = os.environ.get("VERSIONED_DOCC_ORAS")
+    if configured:
+        executable = shutil.which(configured) or configured
+        path = Path(executable).expanduser()
+        if path.is_file():
+            return str(path.resolve())
+        raise VersionedDocCError(f"configured ORAS executable not found: {configured}")
+    return shutil.which("oras")
+
+
+def oci_artifact_exists(oras, repository, tag):
+    target_options, target = oci_target(repository, tag)
+    result = run_status(
+        [oras, "manifest", "fetch", "--descriptor", *target_options, target]
+    )
+    if result.returncode == 0:
+        try:
+            descriptor = json.loads(result.stdout)
+        except json.JSONDecodeError as error:
+            raise VersionedDocCError(f"invalid OCI descriptor: {target}") from error
+        if descriptor.get("artifactType") != OCI_ARTIFACT_TYPE:
+            raise VersionedDocCError(
+                f"unexpected OCI artifact type for {target}: "
+                f"{descriptor.get('artifactType')}"
+            )
+        return True
+    details = f"{result.stdout}\n{result.stderr}".lower()
+    missing_markers = (
+        "not found",
+        "no such file or directory",
+        "manifest unknown",
+        "name unknown",
+        "404",
+    )
+    if any(marker in details for marker in missing_markers):
+        return False
+    raise VersionedDocCError(
+        f"unable to query OCI cache {target}:\n{(result.stderr or result.stdout).strip()}"
+    )
+
+
+def validate_oci_metadata(oras, repository, tag, version, commit, fingerprint):
+    target_options, target = oci_target(repository, tag)
+    contents = run(
+        [oras, "manifest", "fetch-config", *target_options, target],
+        capture=True,
+    )
+    try:
+        metadata = json.loads(contents)
+    except json.JSONDecodeError as error:
+        raise VersionedDocCError(f"invalid OCI cache metadata: {target}") from error
+    expected = {
+        "version": version["name"],
+        "sourceCommit": commit,
+        "buildFingerprint": fingerprint,
+    }
+    mismatches = [
+        key for key, value in expected.items() if metadata.get(key) != value
+    ]
+    if mismatches:
+        raise VersionedDocCError(
+            f"OCI cache metadata mismatch for {target}: {', '.join(mismatches)}"
+        )
+    return metadata
+
+
+def create_cache_archive(cache_entry, archive_path):
+    with archive_path.open("wb") as raw_archive:
+        with gzip.GzipFile(
+            filename="",
+            mode="wb",
+            fileobj=raw_archive,
+            compresslevel=6,
+            mtime=0,
+        ) as compressed:
+            with tarfile.open(fileobj=compressed, mode="w|") as archive:
+                for path in sorted(cache_entry.rglob("*")):
+                    if path.is_symlink():
+                        raise VersionedDocCError(f"OCI cache cannot archive symlink: {path}")
+                    relative = path.relative_to(cache_entry).as_posix()
+                    information = archive.gettarinfo(str(path), arcname=relative)
+                    information.uid = 0
+                    information.gid = 0
+                    information.uname = ""
+                    information.gname = ""
+                    information.mtime = 0
+                    if path.is_file():
+                        with path.open("rb") as source:
+                            archive.addfile(information, source)
+                    else:
+                        archive.addfile(information)
+
+
+def extract_cache_archive(archive_path, destination):
+    destination.mkdir(parents=True)
+    with tarfile.open(archive_path, mode="r:gz") as archive:
+        for member in archive:
+            if not (member.isfile() or member.isdir()):
+                raise VersionedDocCError(f"unsupported OCI cache entry: {member.name}")
+            member_path = Path(member.name)
+            if member_path.is_absolute() or ".." in member_path.parts:
+                raise VersionedDocCError(f"unsafe OCI cache entry: {member.name}")
+            output = destination / member_path
+            if member.isdir():
+                output.mkdir(parents=True, exist_ok=True)
+                continue
+            output.parent.mkdir(parents=True, exist_ok=True)
+            source = archive.extractfile(member)
+            if source is None:
+                raise VersionedDocCError(f"unable to extract OCI cache entry: {member.name}")
+            with source, output.open("wb") as target:
+                shutil.copyfileobj(source, target)
+            output.chmod(member.mode & 0o777)
+
+
+def restore_oci_cache(
+    oras,
+    config,
+    version,
+    commit,
+    fingerprint,
+    cache_root,
+):
+    repository = config["ociCache"]["repository"]
+    tag = oci_cache_tag(version, commit, fingerprint)
+    reference = oci_reference(config, version, commit, fingerprint)
+    if not oci_artifact_exists(oras, repository, tag):
+        print(f"OCI cache miss: {version['name']} ({reference})")
+        return False
+    validate_oci_metadata(oras, repository, tag, version, commit, fingerprint)
+
+    temporary = Path(tempfile.mkdtemp(prefix=".oci-pull-", dir=cache_root))
+    staging = cache_root / f".restoring-{version['name']}-{os.getpid()}"
+    remove_tree(staging, cache_root, "OCI cache staging directory")
+    try:
+        download = temporary / "download"
+        download.mkdir()
+        target_options, target = oci_target(repository, tag)
+        run([oras, "pull", "--output", str(download), *target_options, target])
+        archive_path = download / OCI_ARCHIVE_NAME
+        if not archive_path.is_file():
+            raise VersionedDocCError(f"OCI cache has no {OCI_ARCHIVE_NAME}: {reference}")
+        extract_cache_archive(archive_path, staging)
+        if not cache_valid(staging, commit, fingerprint, config["moduleName"]):
+            raise VersionedDocCError(f"OCI cache metadata mismatch: {reference}")
+        cache_entry = cache_root / version["name"]
+        remove_tree(cache_entry, cache_root, "version cache")
+        staging.rename(cache_entry)
+    except Exception:
+        remove_tree(staging, cache_root, "failed OCI cache staging directory")
+        raise
+    finally:
+        shutil.rmtree(temporary, ignore_errors=True)
+    print(f"OCI cache restored: {version['name']} ({reference})")
+    return True
+
+
+def publish_oci_cache(
+    oras,
+    config,
+    version,
+    commit,
+    fingerprint,
+    cache_root,
+):
+    repository = config["ociCache"]["repository"]
+    tag = oci_cache_tag(version, commit, fingerprint)
+    reference = oci_reference(config, version, commit, fingerprint)
+    if oci_artifact_exists(oras, repository, tag):
+        validate_oci_metadata(oras, repository, tag, version, commit, fingerprint)
+        print(f"OCI cache exists: {version['name']} ({reference})")
+        return False
+
+    cache_entry = cache_root / version["name"]
+    temporary = Path(tempfile.mkdtemp(prefix=".oci-push-", dir=cache_root))
+    try:
+        archive_path = temporary / OCI_ARCHIVE_NAME
+        create_cache_archive(cache_entry, archive_path)
+        metadata_name = "metadata.json"
+        shutil.copy2(cache_entry / metadata_name, temporary / metadata_name)
+        target_options, target = oci_target(repository, tag)
+        command = [
+            oras,
+            "push",
+            "--artifact-type",
+            OCI_ARTIFACT_TYPE,
+            "--config",
+            f"{metadata_name}:{OCI_CONFIG_TYPE}",
+            "--annotation",
+            f"org.opencontainers.image.version={version['name']}",
+            "--annotation",
+            f"org.opencontainers.image.revision={commit}",
+        ]
+        source_repository = config.get("sourceRepository")
+        if source_repository:
+            command.extend(
+                ["--annotation", f"org.opencontainers.image.source={source_repository}"]
+            )
+        command.extend(
+            [*target_options, target, f"{OCI_ARCHIVE_NAME}:{OCI_LAYER_TYPE}"]
+        )
+        run(command, cwd=temporary)
+        digest = run([oras, "resolve", *target_options, target], capture=True)
+    finally:
+        shutil.rmtree(temporary, ignore_errors=True)
+    print(f"OCI cache published: {version['name']} ({digest})")
+    return True
 
 
 def build_version(
@@ -662,33 +930,86 @@ def build_command(arguments):
     header_template = Path(__file__).with_name("header.html").read_text(encoding="utf-8")
     docc_command, docc_binary = find_docc()
     fingerprint = build_fingerprint(config, docc_binary, header_template)
+    oci_cache = config.get("ociCache")
+    if arguments.publish_oci_cache and not oci_cache:
+        raise VersionedDocCError("--publish-oci-cache requires ociCache configuration")
+    if arguments.publish_oci_cache and arguments.no_oci_cache:
+        raise VersionedDocCError("--publish-oci-cache cannot be combined with --no-oci-cache")
+    oras = None
+    reported_missing_oras = False
     print(f"VersionedDocC {VERSION}")
     print(f"  Config: {config_path}")
     print(f"  Versions: {' '.join(item['name'] for item in versions)}")
     print(f"  Cache: {cache_root}")
     print(f"  Output: {output_path}")
+    if oci_cache:
+        print(f"  OCI cache: {oci_cache['repository']}")
     for version in versions:
         commit = git(package_root, "rev-parse", f"{version['ref']}^{{commit}}")
         cache_entry = cache_root / version["name"]
-        if not arguments.rebuild and cache_valid(
+        cache_hit = not arguments.rebuild and cache_valid(
             cache_entry, commit, fingerprint, config["moduleName"]
-        ):
-            print(f"Cache hit: {version['name']} ({commit[:8]})")
-            continue
-        if arguments.assemble_only:
-            raise VersionedDocCError(f"cache miss for {version['name']} in assemble-only mode")
-        build_version(
-            package_root,
-            config,
-            version,
-            commit,
-            cache_root,
-            logs_root,
-            fingerprint,
-            build_date,
-            header_template,
-            docc_command,
         )
+        uses_remote = (
+            oci_cache
+            and not arguments.no_oci_cache
+            and uses_oci_cache(config, version)
+        )
+        if (
+            not cache_hit
+            and not arguments.rebuild
+            and uses_remote
+            and oci_cache.get("pull", True)
+        ):
+            if oras is None:
+                oras = find_oras()
+            if oras is None:
+                if not reported_missing_oras:
+                    print("OCI cache unavailable: install oras or set VERSIONED_DOCC_ORAS")
+                    reported_missing_oras = True
+            else:
+                cache_hit = restore_oci_cache(
+                    oras,
+                    config,
+                    version,
+                    commit,
+                    fingerprint,
+                    cache_root,
+                )
+        if cache_hit:
+            print(f"Cache hit: {version['name']} ({commit[:8]})")
+        else:
+            if arguments.assemble_only:
+                raise VersionedDocCError(
+                    f"cache miss for {version['name']} in assemble-only mode"
+                )
+            build_version(
+                package_root,
+                config,
+                version,
+                commit,
+                cache_root,
+                logs_root,
+                fingerprint,
+                build_date,
+                header_template,
+                docc_command,
+            )
+        if arguments.publish_oci_cache and uses_remote:
+            if oras is None:
+                oras = find_oras()
+            if oras is None:
+                raise VersionedDocCError(
+                    "--publish-oci-cache requires oras; install it or set VERSIONED_DOCC_ORAS"
+                )
+            publish_oci_cache(
+                oras,
+                config,
+                version,
+                commit,
+                fingerprint,
+                cache_root,
+            )
     assemble(package_root, config, versions, cache_root, output_path, build_date)
     print(
         f"Preview: http://127.0.0.1:{arguments.preview_port}"
@@ -750,6 +1071,16 @@ def parse_arguments():
     build.add_argument("--build-date")
     build.add_argument("--assemble-only", action="store_true")
     build.add_argument("--rebuild", action="store_true")
+    build.add_argument(
+        "--no-oci-cache",
+        action="store_true",
+        help="do not restore or publish configured OCI cache artifacts",
+    )
+    build.add_argument(
+        "--publish-oci-cache",
+        action="store_true",
+        help="publish eligible version caches after validating or building them",
+    )
     build.add_argument("--preview-port", type=int, default=8766)
     preview = subparsers.add_parser("preview", help="Serve an assembled site with wildcard redirects")
     preview.add_argument("--package-path", default=".")

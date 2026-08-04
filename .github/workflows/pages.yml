@@ -18,9 +18,15 @@ on:
         required: false
         default: false
         type: boolean
+      publish-oci-cache:
+        description: Publish immutable release caches to the configured OCI repository
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
+  packages: write
   pages: write
   id-token: write
 
@@ -38,9 +44,13 @@ jobs:
           restore-keys: |
             versioned-docc-${{ runner.os }}-${{ hashFiles(inputs.config, 'Package.resolved') }}-
             versioned-docc-${{ runner.os }}-
-      - uses: OpenSwiftUIProject/VersionedDocC@0.0.2
+      - uses: oras-project/setup-oras@v1
+      - name: Log in to GitHub Container Registry
+        run: echo "${{ github.token }}" | oras login ghcr.io --username "${{ github.actor }}" --password-stdin
+      - uses: OpenSwiftUIProject/VersionedDocC@0.0.3
         with:
           config: ${{ inputs.config }}
+          publish-oci-cache: ${{ inputs.publish-oci-cache }}
       - uses: actions/upload-pages-artifact@v5
         with:
           path: ${{ inputs.artifact-path }}
