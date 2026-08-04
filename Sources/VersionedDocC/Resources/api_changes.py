@@ -108,6 +108,30 @@ def load_snapshot(path, module_path, documentation_urls=None):
     return snapshot
 
 
+def merge_snapshots(paths, module_path, documentation_urls=None):
+    """Merge platform-specific graphs, keeping the first graph as primary."""
+    merged = {}
+    identifiers_by_precise = {}
+    for path in paths:
+        snapshot = load_snapshot(path, module_path, documentation_urls)
+        for identifier, item in snapshot.items():
+            existing_identifier = identifiers_by_precise.get(item["precise"])
+            if existing_identifier is not None:
+                existing = merged[existing_identifier]
+                existing["availability"] = list(
+                    dict.fromkeys(existing["availability"] + item["availability"])
+                )
+                if existing.get("path") is None and item.get("path") is not None:
+                    existing["path"] = item["path"]
+                continue
+            if identifier in merged:
+                identifier = f"{item['displayId']}#{item['precise']}"
+                item["id"] = identifier
+            merged[identifier] = item
+            identifiers_by_precise[item["precise"]] = identifier
+    return merged
+
+
 def compare(previous_version, current_version, previous, current):
     changes = []
     previous_ids = set(previous)
@@ -236,17 +260,22 @@ def render_dashboard(comparisons, arguments):
 def main():
     arguments = parse_arguments()
     versions = []
+    graph_paths = {}
     snapshots = {}
     for specification in arguments.symbol_graph:
         version, separator, raw_path = specification.partition("=")
         if not separator:
             raise ValueError(f"invalid symbol graph specification: {specification}")
-        versions.append(version)
+        if version not in graph_paths:
+            versions.append(version)
+            graph_paths[version] = []
+        graph_paths[version].append(Path(raw_path))
+    for version in versions:
         documentation_urls = load_docc_urls(
             arguments.output_root / version / "data" / "documentation"
         )
-        snapshots[version] = load_snapshot(
-            Path(raw_path), arguments.module_path, documentation_urls
+        snapshots[version] = merge_snapshots(
+            graph_paths[version], arguments.module_path, documentation_urls
         )
     comparisons = []
     for index in range(len(versions) - 1):

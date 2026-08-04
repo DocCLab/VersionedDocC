@@ -150,8 +150,58 @@ def load_config(package_root, config_path):
     config.setdefault("localDependencies", {})
     config.setdefault("allowedModules", [config["moduleName"]])
     config.setdefault("symbolGraph", {})
-    config["symbolGraph"].setdefault("minimumAccessLevel", "public")
-    config["symbolGraph"].setdefault("skipProtocolImplementations", True)
+    symbol_graph = config["symbolGraph"]
+    if not isinstance(symbol_graph, dict):
+        raise VersionedDocCError("symbolGraph must be an object")
+    symbol_graph.setdefault("minimumAccessLevel", "public")
+    symbol_graph.setdefault("skipProtocolImplementations", True)
+    platforms = symbol_graph.get("platforms")
+    if platforms is not None:
+        if not isinstance(platforms, list) or not platforms:
+            raise VersionedDocCError("symbolGraph.platforms must be a non-empty array")
+        names = set()
+        for platform in platforms:
+            if not isinstance(platform, dict):
+                raise VersionedDocCError("each symbolGraph platform must be an object")
+            name = platform.get("name")
+            triple = platform.get("triple")
+            if not isinstance(name, str) or not name.strip():
+                raise VersionedDocCError("each symbolGraph platform requires a name")
+            if not isinstance(triple, str) or not triple.strip():
+                raise VersionedDocCError(
+                    f"symbolGraph platform {name} requires a target triple"
+                )
+            normalized_name = name.casefold()
+            if normalized_name in names:
+                raise VersionedDocCError(f"duplicate symbolGraph platform: {name}")
+            names.add(normalized_name)
+            platform.setdefault("buildArguments", [])
+            if not isinstance(platform["buildArguments"], list) or not all(
+                isinstance(argument, str) for argument in platform["buildArguments"]
+            ):
+                raise VersionedDocCError(
+                    f"symbolGraph platform {name} buildArguments must be strings"
+                )
+            for key in ("sdk", "swiftSDK"):
+                value = platform.get(key)
+                if value is not None and (not isinstance(value, str) or not value):
+                    raise VersionedDocCError(
+                        f"symbolGraph platform {name} {key} must be a non-empty string"
+                    )
+        default_platform = symbol_graph.setdefault("defaultPlatform", platforms[0]["name"])
+        if not isinstance(default_platform, str) or default_platform.casefold() not in names:
+            raise VersionedDocCError(
+                "symbolGraph.defaultPlatform must match a configured platform name"
+            )
+        symbol_graph["platforms"] = sorted(
+            platforms,
+            key=lambda platform: platform["name"].casefold()
+            != default_platform.casefold(),
+        )
+    elif "defaultPlatform" in symbol_graph:
+        raise VersionedDocCError(
+            "symbolGraph.defaultPlatform requires symbolGraph.platforms"
+        )
     config.setdefault("apiChanges", {})
     if not isinstance(config["apiChanges"], dict):
         raise VersionedDocCError("apiChanges must be an object")
@@ -173,6 +223,37 @@ def load_config(package_root, config_path):
         oci_cache.setdefault("pull", True)
         oci_cache.setdefault("includeDevelopment", False)
     return config, path
+
+
+def platform_slug(value):
+    slug = re.sub(r"[^A-Za-z0-9._-]", "-", value.strip()).strip("-._")
+    return slug.lower() or "platform"
+
+
+def configured_symbol_graph_platforms(config):
+    return config["symbolGraph"].get("platforms", [])
+
+
+def resolve_platform_sdk(platform):
+    sdk = platform.get("sdk")
+    if not sdk:
+        return None
+    path = Path(sdk).expanduser()
+    if path.is_absolute():
+        if not path.is_dir():
+            raise VersionedDocCError(
+                f"missing SDK for symbolGraph platform {platform['name']}: {path}"
+            )
+        return str(path)
+    if not shutil.which("xcrun"):
+        raise VersionedDocCError(
+            f"symbolGraph platform {platform['name']} SDK {sdk} requires xcrun"
+        )
+    return run(["xcrun", "--sdk", sdk, "--show-sdk-path"], capture=True)
+
+
+def module_symbol_graph_paths(symbols_root, module_name):
+    return sorted(symbols_root.rglob(f"{module_name}.symbols.json"))
 
 
 def semantic_versions(repository, count):
@@ -420,9 +501,9 @@ def build_fingerprint(config, docc_binary, header_template):
 
 def cache_valid(cache_entry, commit, fingerprint, module_name):
     metadata_path = cache_entry / "metadata.json"
-    graph_path = cache_entry / "symbols" / f"{module_name}.symbols.json"
     site_path = cache_entry / "site" / "index.html"
-    if not metadata_path.is_file() or not graph_path.is_file() or not site_path.is_file():
+    graph_paths = module_symbol_graph_paths(cache_entry / "symbols", module_name)
+    if not metadata_path.is_file() or not graph_paths or not site_path.is_file():
         return False
     with metadata_path.open(encoding="utf-8") as source:
         metadata = json.load(source)
@@ -686,46 +767,81 @@ def build_version(
     print(f"Building {version['name']} ({commit[:8]})")
     try:
         with PreparedSource(package_root, config, version, commit) as source_root:
-            graph_directory = staging / "symbols"
-            build_command = [
-                "swift",
-                "build",
-                # Command plugins already run inside SwiftPM's sandbox. A
-                # nested swift build can't apply a second sandbox profile.
-                "--disable-sandbox",
-                "--package-path",
-                str(source_root),
-                "--target",
-                config["targetName"],
-                *config["buildArguments"],
-                "-Xswiftc",
-                "-emit-symbol-graph",
-                "-Xswiftc",
-                "-emit-symbol-graph-dir",
-                "-Xswiftc",
-                str(graph_directory),
-                "-Xswiftc",
-                "-symbol-graph-minimum-access-level",
-                "-Xswiftc",
-                config["symbolGraph"]["minimumAccessLevel"],
-            ]
-            if config["symbolGraph"].get("skipProtocolImplementations", True):
-                # Force the symbol-graph option through SwiftPM's driver. Passing
-                # it as a plain Swift driver option doesn't reach the frontend
-                # emit-module job with current Apple Swift toolchains.
-                build_command.extend(
-                    ["-Xswiftc", "-Xfrontend", "-Xswiftc", "-skip-protocol-implementations"]
-                )
-            run(
-                build_command,
-                environment=config["environment"],
-                log_path=logs_root / f"{version['name']}-swift-build.log",
+            graph_root = staging / "symbols"
+            platforms = configured_symbol_graph_platforms(config)
+            graph_builds = (
+                [
+                    (
+                        platform,
+                        graph_root
+                        / f"{index:02d}-{platform_slug(platform['name'])}",
+                    )
+                    for index, platform in enumerate(platforms)
+                ]
+                if platforms
+                else [(None, graph_root)]
             )
-            graph_path = graph_directory / f"{config['moduleName']}.symbols.json"
-            if not graph_path.is_file():
-                raise VersionedDocCError(f"missing symbol graph: {graph_path}")
-            filter_symbol_graph(graph_path, set(config["allowedModules"]))
-            retain_symbol_graph_module(graph_directory, config["moduleName"])
+            for platform, graph_directory in graph_builds:
+                graph_directory.mkdir(parents=True, exist_ok=True)
+                platform_arguments = []
+                log_suffix = ""
+                if platform is not None:
+                    print(f"Building {version['name']} [{platform['name']}]")
+                    log_suffix = f"-{platform_slug(platform['name'])}"
+                    platform_arguments.extend(["--triple", platform["triple"]])
+                    sdk = resolve_platform_sdk(platform)
+                    if sdk:
+                        platform_arguments.extend(["--sdk", sdk])
+                    swift_sdk = platform.get("swiftSDK")
+                    if swift_sdk:
+                        platform_arguments.extend(["--swift-sdk", swift_sdk])
+                    platform_arguments.extend(platform["buildArguments"])
+                build_command = [
+                    "swift",
+                    "build",
+                    # Command plugins already run inside SwiftPM's sandbox. A
+                    # nested swift build can't apply a second sandbox profile.
+                    "--disable-sandbox",
+                    "--package-path",
+                    str(source_root),
+                    "--target",
+                    config["targetName"],
+                    *config["buildArguments"],
+                    *platform_arguments,
+                    "-Xswiftc",
+                    "-emit-symbol-graph",
+                    "-Xswiftc",
+                    "-emit-symbol-graph-dir",
+                    "-Xswiftc",
+                    str(graph_directory),
+                    "-Xswiftc",
+                    "-symbol-graph-minimum-access-level",
+                    "-Xswiftc",
+                    config["symbolGraph"]["minimumAccessLevel"],
+                ]
+                if config["symbolGraph"].get("skipProtocolImplementations", True):
+                    # Force the symbol-graph option through SwiftPM's driver. Passing
+                    # it as a plain Swift driver option doesn't reach the frontend
+                    # emit-module job with current Apple Swift toolchains.
+                    build_command.extend(
+                        [
+                            "-Xswiftc",
+                            "-Xfrontend",
+                            "-Xswiftc",
+                            "-skip-protocol-implementations",
+                        ]
+                    )
+                run(
+                    build_command,
+                    environment=config["environment"],
+                    log_path=logs_root
+                    / f"{version['name']}{log_suffix}-swift-build.log",
+                )
+                graph_path = graph_directory / f"{config['moduleName']}.symbols.json"
+                if not graph_path.is_file():
+                    raise VersionedDocCError(f"missing symbol graph: {graph_path}")
+                filter_symbol_graph(graph_path, set(config["allowedModules"]))
+                retain_symbol_graph_module(graph_directory, config["moduleName"])
 
             source_catalog = source_root / config["catalogPath"]
             if not source_catalog.is_dir():
@@ -741,7 +857,7 @@ def build_version(
                 "convert",
                 str(catalog),
                 "--additional-symbol-graph-dir",
-                str(graph_directory),
+                str(graph_root),
                 "--transform-for-static-hosting",
                 "--output-path",
                 str(staging / "site"),
@@ -786,6 +902,9 @@ def build_version(
         "sourceCommit": commit,
         "buildDate": build_date,
         "buildFingerprint": fingerprint,
+        "platforms": [platform["name"] for platform in platforms]
+        if platforms
+        else ["host"],
     }
     (staging / "metadata.json").write_text(
         json.dumps(metadata, indent=2, sort_keys=True) + "\n", encoding="utf-8"
@@ -987,6 +1106,7 @@ def assemble(package_root, config, versions, cache_root, output_path, build_date
                 "path": f"{config['hostingBasePath']}/{version['name']}/",
                 "buildDate": metadata["buildDate"],
                 "sourceCommit": metadata["sourceCommit"],
+                "platforms": metadata.get("platforms", ["host"]),
             }
         )
         version_output = output_path / version["name"]
@@ -1022,12 +1142,17 @@ def assemble(package_root, config, versions, cache_root, output_path, build_date
         str(config["apiChanges"]["pageSize"]),
     ]
     for version in versions:
-        api_command.extend(
-            [
-                "--symbol-graph",
-                f"{version['name']}={cache_root / version['name'] / 'symbols' / (config['moduleName'] + '.symbols.json')}",
-            ]
+        graph_paths = module_symbol_graph_paths(
+            cache_root / version["name"] / "symbols", config["moduleName"]
         )
+        if not graph_paths:
+            raise VersionedDocCError(
+                f"missing symbol graphs for {version['name']} ({config['moduleName']})"
+            )
+        for graph_path in graph_paths:
+            api_command.extend(
+                ["--symbol-graph", f"{version['name']}={graph_path}"]
+            )
     run(api_command)
     print(f"Versioned documentation assembled at {output_path}")
 

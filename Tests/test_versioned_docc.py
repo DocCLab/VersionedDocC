@@ -379,6 +379,115 @@ class VersionedDocCTests(unittest.TestCase):
 
         self.assertIsNone(snapshot["P.value"]["path"])
 
+    def test_api_changes_merge_platform_snapshots_with_primary_declaration(self):
+        def symbol(precise, title, declaration, platform):
+            return {
+                "identifier": {"precise": precise},
+                "pathComponents": [title],
+                "names": {"title": title},
+                "kind": {"displayName": "Structure"},
+                "declarationFragments": [{"spelling": declaration}],
+                "availability": [
+                    {
+                        "domain": platform,
+                        "introduced": {"major": 13 if platform == "iOS" else 10},
+                    }
+                ],
+            }
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            ios = root / "ios.json"
+            macos = root / "macos.json"
+            ios.write_text(
+                json.dumps(
+                    {
+                        "symbols": [
+                            symbol("s:4Demo8CommonAPIV", "CommonAPI", "iOS primary", "iOS"),
+                            symbol("s:4Demo10IOSOnlyAPIV", "IOSOnlyAPI", "iOS only", "iOS"),
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            macos.write_text(
+                json.dumps(
+                    {
+                        "symbols": [
+                            symbol(
+                                "s:4Demo8CommonAPIV",
+                                "CommonAPI",
+                                "macOS secondary",
+                                "macOS",
+                            ),
+                            symbol(
+                                "s:4Demo12MacOSOnlyAPIV",
+                                "MacOSOnlyAPI",
+                                "macOS only",
+                                "macOS",
+                            ),
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            snapshot = api_changes.merge_snapshots([ios, macos], "demo")
+
+        self.assertEqual(
+            set(snapshot), {"CommonAPI", "IOSOnlyAPI", "MacOSOnlyAPI"}
+        )
+        self.assertEqual(snapshot["CommonAPI"]["declaration"], "iOS primary")
+        self.assertEqual(
+            snapshot["CommonAPI"]["availability"], ["iOS 13", "macOS 10"]
+        )
+
+    def test_api_changes_merge_deduplicates_reordered_overloads(self):
+        def symbol(precise, declaration):
+            return {
+                "identifier": {"precise": precise},
+                "pathComponents": ["make()"],
+                "names": {"title": "make()"},
+                "kind": {"displayName": "Function"},
+                "declarationFragments": [{"spelling": declaration}],
+            }
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            first = root / "first.json"
+            second = root / "second.json"
+            first.write_text(
+                json.dumps(
+                    {
+                        "symbols": [
+                            symbol("p1", "primary 1"),
+                            symbol("p2", "primary 2"),
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            second.write_text(
+                json.dumps(
+                    {
+                        "symbols": [
+                            symbol("p2", "secondary 2"),
+                            symbol("p1", "secondary 1"),
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            snapshot = api_changes.merge_snapshots([first, second], "demo")
+
+        self.assertEqual(len(snapshot), 2)
+        self.assertEqual({item["precise"] for item in snapshot.values()}, {"p1", "p2"})
+        self.assertEqual(
+            {item["declaration"] for item in snapshot.values()},
+            {"primary 1", "primary 2"},
+        )
+
     def test_api_changes_dashboard_restores_controls_from_url(self):
         arguments = mock.Mock(
             hosting_base_path="/DemoKit",
@@ -432,6 +541,74 @@ class VersionedDocCTests(unittest.TestCase):
             loaded, _ = versioned_docc.load_config(root, path)
             self.assertEqual(loaded["apiChanges"]["pageSize"], 25)
 
+    def test_symbol_graph_platform_configuration_orders_default_first(self):
+        config = {
+            "schemaVersion": 1,
+            "projectName": "DemoKit",
+            "moduleName": "DemoKit",
+            "targetName": "DemoKit",
+            "catalogPath": "Sources/DemoKit/DemoKit.docc",
+            "hostingBasePath": "/DemoKit",
+            "versions": [
+                {"name": "main", "ref": "HEAD"},
+                {"name": "0.1.0", "ref": "0.1.0"},
+            ],
+            "symbolGraph": {
+                "defaultPlatform": "iOS",
+                "platforms": [
+                    {
+                        "name": "macOS",
+                        "triple": "arm64-apple-macosx",
+                        "sdk": "macosx",
+                    },
+                    {
+                        "name": "iOS",
+                        "triple": "arm64-apple-ios",
+                        "sdk": "iphoneos",
+                    },
+                ],
+            },
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = root / ".vdc.json"
+            path.write_text(json.dumps(config), encoding="utf-8")
+
+            loaded, _ = versioned_docc.load_config(root, path)
+
+        platforms = loaded["symbolGraph"]["platforms"]
+        self.assertEqual([platform["name"] for platform in platforms], ["iOS", "macOS"])
+        self.assertEqual(platforms[0]["buildArguments"], [])
+
+    def test_symbol_graph_default_platform_must_be_configured(self):
+        config = {
+            "schemaVersion": 1,
+            "projectName": "DemoKit",
+            "moduleName": "DemoKit",
+            "targetName": "DemoKit",
+            "catalogPath": "Sources/DemoKit/DemoKit.docc",
+            "hostingBasePath": "/DemoKit",
+            "versions": [
+                {"name": "main", "ref": "HEAD"},
+                {"name": "0.1.0", "ref": "0.1.0"},
+            ],
+            "symbolGraph": {
+                "defaultPlatform": "visionOS",
+                "platforms": [
+                    {"name": "iOS", "triple": "arm64-apple-ios"},
+                ],
+            },
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = root / ".vdc.json"
+            path.write_text(json.dumps(config), encoding="utf-8")
+
+            with self.assertRaisesRegex(
+                versioned_docc.VersionedDocCError, "defaultPlatform"
+            ):
+                versioned_docc.load_config(root, path)
+
     def test_default_configuration_filename_is_vdc_json(self):
         with mock.patch.object(
             versioned_docc.sys, "argv", ["versioned-docc", "build"]
@@ -483,6 +660,26 @@ class VersionedDocCTests(unittest.TestCase):
                 ["OpenSwiftUI.symbols.json", "OpenSwiftUI@Foundation.symbols.json"],
             )
             self.assertFalse((root / "SwiftSyntax.symbols.json").exists())
+
+    def test_cache_validation_accepts_nested_platform_symbol_graphs(self):
+        with tempfile.TemporaryDirectory() as directory:
+            cache = Path(directory)
+            (cache / "symbols" / "00-ios").mkdir(parents=True)
+            (cache / "site").mkdir()
+            (cache / "symbols" / "00-ios" / "DemoKit.symbols.json").write_text(
+                "{}\n", encoding="utf-8"
+            )
+            (cache / "site" / "index.html").write_text("fixture\n", encoding="utf-8")
+            (cache / "metadata.json").write_text(
+                json.dumps({"sourceCommit": "commit", "buildFingerprint": "fingerprint"}),
+                encoding="utf-8",
+            )
+
+            self.assertTrue(
+                versioned_docc.cache_valid(
+                    cache, "commit", "fingerprint", "DemoKit"
+                )
+            )
 
     def test_prune_site_to_module_removes_dependency_documentation_and_indexes(self):
         with tempfile.TemporaryDirectory() as directory:

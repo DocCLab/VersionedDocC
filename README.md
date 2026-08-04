@@ -51,7 +51,20 @@ Add `.vdc.json` to the package root:
   },
   "symbolGraph": {
     "minimumAccessLevel": "public",
-    "skipProtocolImplementations": true
+    "skipProtocolImplementations": true,
+    "defaultPlatform": "iOS",
+    "platforms": [
+      {
+        "name": "iOS",
+        "triple": "arm64-apple-ios",
+        "sdk": "iphoneos"
+      },
+      {
+        "name": "macOS",
+        "triple": "arm64-apple-macosx",
+        "sdk": "macosx"
+      }
+    ]
   },
   "apiChanges": {
     "pageSize": 10
@@ -70,6 +83,33 @@ by `latest`. The example currently publishes `main`, the newest release, and
 API Changes pages show 10 entries per page by default. Consumers can override
 the presentation-only value with `apiChanges.pageSize`; changing it reassembles
 the site without invalidating version documentation caches.
+
+### Multi-platform symbol graphs
+
+When `symbolGraph.platforms` is present, VersionedDocC builds the target once
+per configured platform, stores the resulting graphs in separate platform
+directories, and passes their common parent directory to a single DocC
+conversion. DocC then produces one archive containing the union of the API and
+platform availability from every graph.
+
+`defaultPlatform` must match a platform `name`. VersionedDocC processes that
+graph first and uses its declaration as the primary representation of a symbol
+shared by multiple platforms on the API Changes page. Platform-only symbols are
+included from every configured graph. For Apple UI packages, iOS is a useful
+primary platform and macOS a useful secondary platform; other packages should
+choose the platform that represents their largest consumer surface.
+
+`triple` is passed to `swift build --triple`. `sdk` can be an absolute SDK path
+or an `xcrun --sdk` identifier such as `iphoneos` or `macosx`. Cross-platform
+Swift SDK bundles can instead be selected with `swiftSDK`, and each platform can
+append its own `buildArguments` array. Package deployment targets continue to
+come from the package manifest when the triple does not include an OS version.
+
+If `symbolGraph.platforms` is omitted, VersionedDocC preserves its original
+single build on the current host platform. This backward-compatible default
+also avoids invalidating existing single-platform release caches. Adding or
+changing platform configuration is part of the immutable cache fingerprint, so
+the affected version caches are rebuilt once.
 
 Use an explicit `versions` array when a site needs fixed release snapshots:
 
