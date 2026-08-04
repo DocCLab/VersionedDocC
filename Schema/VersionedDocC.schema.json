@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://raw.githubusercontent.com/OpenSwiftUIProject/VersionedDocC/0.0.4/Schema/VersionedDocC.schema.json",
+  "$id": "https://raw.githubusercontent.com/OpenSwiftUIProject/VersionedDocC/0.0.5/Schema/VersionedDocC.schema.json",
   "title": "VersionedDocC configuration",
   "type": "object",
   "required": [
@@ -73,6 +73,13 @@
         "minimumAccessLevel": { "type": "string", "default": "public" },
         "skipProtocolImplementations": { "type": "boolean", "default": true }
       }
+    },
+    "apiChanges": {
+      "type": "object",
+      "properties": {
+        "pageSize": { "type": "integer", "minimum": 1, "default": 10 }
+      },
+      "additionalProperties": false
     },
     "allowedModules": { "type": "array", "items": { "type": "string" } },
     "environment": { "type": "object", "additionalProperties": { "type": ["string", "number", "boolean"] } },

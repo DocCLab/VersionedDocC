@@ -9,6 +9,13 @@ from pathlib import Path
 CHANGE_ORDER = {"added": 0, "modified": 1, "removed": 2}
 
 
+def positive_integer(value):
+    parsed = int(value)
+    if parsed < 1:
+        raise argparse.ArgumentTypeError("must be a positive integer")
+    return parsed
+
+
 def parse_arguments():
     parser = argparse.ArgumentParser(description="Generate a versioned public API changes site")
     parser.add_argument("--symbol-graph", action="append", required=True)
@@ -18,6 +25,7 @@ def parse_arguments():
     parser.add_argument("--build-date", required=True)
     parser.add_argument("--project-name", required=True)
     parser.add_argument("--module-path", required=True)
+    parser.add_argument("--page-size", type=positive_integer, default=10)
     return parser.parse_args()
 
 
@@ -192,15 +200,35 @@ def render_dashboard(comparisons, arguments):
     <div class="result-bar"><span id="result-count"></span><div class="pager"><button id="previous">Previous</button><button id="next">Next</button></div></div><div id="changes" class="changes-list"></div><p id="empty" class="empty" hidden>No changes match this filter.</p></section>
   </main>
   <script>
-    const DATA={data}; const BASE={json.dumps(base)}; const PAGE_SIZE=50; let page=0;
+    const DATA={data}; const BASE={json.dumps(base)}; const PAGE_SIZE={arguments.page_size}; let page=0;
     const compare=document.getElementById('compare'), filter=document.getElementById('filter'), search=document.getElementById('search'), list=document.getElementById('changes');
     const escapeHTML=(value)=>String(value??'').replace(/[&<>"']/g,(character)=>({{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}}[character]));
     function activeComparison() {{ return DATA.comparisons.find(item=>item.id===compare.value)||DATA.comparisons[0]; }}
     function symbol(change) {{ return change.current||change.previous; }}
     function visibleChanges(comparison) {{ const query=search.value.trim().toLowerCase(); return comparison.changes.filter(change=>{{ const item=symbol(change); return (filter.value==='all'||change.type===filter.value)&&(!query||(item.displayId+' '+item.declaration).toLowerCase().includes(query)); }}); }}
     function card(change,comparison) {{ const item=symbol(change), linkVersion=change.type==='removed'?comparison.previousVersion:comparison.currentVersion, href=item.path?BASE+'/'+linkVersion+item.path:null, title=href?`<h2><a href="${{escapeHTML(href)}}">${{escapeHTML(item.title)}}</a></h2>`:`<h2>${{escapeHTML(item.title)}}</h2>`, documentationLink=href?`<footer><a href="${{escapeHTML(href)}}">View documentation →</a></footer>`:''; let declarations=''; if(change.type==='modified') declarations=`<div class="declaration"><span>Current · ${{escapeHTML(comparison.currentVersion)}}</span><code>+ ${{escapeHTML(change.current.declaration)}}</code></div><div class="declaration"><span>Previous · ${{escapeHTML(comparison.previousVersion)}}</span><code>− ${{escapeHTML(change.previous.declaration)}}</code></div>`; else declarations=`<div class="declaration"><span>${{escapeHTML(linkVersion)}}</span><code>${{escapeHTML(item.declaration)}}</code></div>`; const availability=item.availability?.length?`<p class="availability">${{escapeHTML(item.availability.join(' · '))}}</p>`:''; return `<article class="change-card ${{change.type}}"><header><span class="badge">${{change.type[0].toUpperCase()+change.type.slice(1)}}</span><span class="kind">${{escapeHTML(item.kind)}}</span></header>${{title}}<p class="symbol-path">${{escapeHTML(item.displayId)}}</p>${{availability}}${{declarations}}${{documentationLink}}</article>`; }}
-    function render() {{ const comparison=activeComparison(), changes=visibleChanges(comparison), pages=Math.max(1,Math.ceil(changes.length/PAGE_SIZE)); page=Math.min(page,pages-1); const start=page*PAGE_SIZE, shown=changes.slice(start,start+PAGE_SIZE); document.getElementById('title').innerHTML=escapeHTML(comparison.previousVersion)+' <span>→</span> '+escapeHTML(comparison.currentVersion); document.getElementById('note').textContent=comparison.changes.length.toLocaleString()+' public API changes from real symbol graphs'; for(const type of ['added','modified','removed']) document.getElementById(type).textContent=comparison.counts[type].toLocaleString(); document.getElementById('result-count').textContent=changes.length?`Showing ${{start+1}}–${{start+shown.length}} of ${{changes.length.toLocaleString()}} changes`:'No matching changes'; document.getElementById('previous').disabled=page===0; document.getElementById('next').disabled=page>=pages-1; list.innerHTML=shown.map(change=>card(change,comparison)).join(''); document.getElementById('empty').hidden=changes.length!==0; }}
-    compare.addEventListener('change',()=>{{page=0;render();}}); filter.addEventListener('change',()=>{{page=0;render();}}); search.addEventListener('input',()=>{{page=0;render();}}); document.getElementById('previous').addEventListener('click',()=>{{page--;render();scrollTo(0,0);}}); document.getElementById('next').addEventListener('click',()=>{{page++;render();scrollTo(0,0);}}); render();
+    function restoreState() {{
+      const parameters=new URLSearchParams(location.search), comparisonId=parameters.get('compare'), show=parameters.get('show'), requestedPage=Number(parameters.get('page'));
+      compare.value=DATA.comparisons.some(item=>item.id===comparisonId)?comparisonId:DATA.comparisons[0].id;
+      filter.value=['all','added','modified','removed'].includes(show)?show:'all';
+      search.value=parameters.get('search')||'';
+      page=Number.isInteger(requestedPage)&&requestedPage>0?requestedPage-1:0;
+    }}
+    function persistState() {{
+      const parameters=new URLSearchParams(location.search), update=(name,value,isDefault)=>isDefault?parameters.delete(name):parameters.set(name,value);
+      update('compare',compare.value,compare.value===DATA.comparisons[0].id);
+      update('show',filter.value,filter.value==='all');
+      update('search',search.value,search.value==='');
+      update('page',String(page+1),page===0);
+      const query=parameters.toString();
+      history.replaceState(null,'',location.pathname+(query?'?'+query:'')+location.hash);
+    }}
+    function render() {{ const comparison=activeComparison(), changes=visibleChanges(comparison), pages=Math.max(1,Math.ceil(changes.length/PAGE_SIZE)); page=Math.min(page,pages-1); const start=page*PAGE_SIZE, shown=changes.slice(start,start+PAGE_SIZE); document.getElementById('title').innerHTML=escapeHTML(comparison.previousVersion)+' <span>→</span> '+escapeHTML(comparison.currentVersion); document.getElementById('note').textContent=comparison.changes.length.toLocaleString()+' public API changes from real symbol graphs'; for(const type of ['added','modified','removed']) document.getElementById(type).textContent=comparison.counts[type].toLocaleString(); document.getElementById('result-count').textContent=changes.length?`Showing ${{start+1}}–${{start+shown.length}} of ${{changes.length.toLocaleString()}} changes`:'No matching changes'; document.getElementById('previous').disabled=page===0; document.getElementById('next').disabled=page>=pages-1; list.innerHTML=shown.map(change=>card(change,comparison)).join(''); document.getElementById('empty').hidden=changes.length!==0; persistState(); }}
+    compare.addEventListener('change',()=>{{page=0;render();}}); filter.addEventListener('change',()=>{{page=0;render();}}); search.addEventListener('input',()=>{{page=0;render();}}); document.getElementById('previous').addEventListener('click',()=>{{page--;render();scrollTo(0,0);}}); document.getElementById('next').addEventListener('click',()=>{{page++;render();scrollTo(0,0);}});
+    function restoreAndRender() {{ restoreState(); render(); }}
+    window.addEventListener('pageshow',restoreAndRender);
+    window.addEventListener('popstate',restoreAndRender);
+    restoreAndRender();
   </script>
 </body></html>\n"""
 

@@ -18,7 +18,7 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 
-VERSION = "0.0.4"
+VERSION = "0.0.5"
 # Keep this stable across releases that only change assembly, routing, or the
 # command interface. Bump it only when the per-version DocC cache contents must
 # be regenerated. Its initial value preserves 0.0.1 cache fingerprints.
@@ -151,6 +151,13 @@ def load_config(package_root, config_path):
     config.setdefault("symbolGraph", {})
     config["symbolGraph"].setdefault("minimumAccessLevel", "public")
     config["symbolGraph"].setdefault("skipProtocolImplementations", True)
+    config.setdefault("apiChanges", {})
+    if not isinstance(config["apiChanges"], dict):
+        raise VersionedDocCError("apiChanges must be an object")
+    config["apiChanges"].setdefault("pageSize", 10)
+    page_size = config["apiChanges"]["pageSize"]
+    if isinstance(page_size, bool) or not isinstance(page_size, int) or page_size < 1:
+        raise VersionedDocCError("apiChanges.pageSize must be a positive integer")
     if "ociCache" in config:
         oci_cache = config["ociCache"]
         if not isinstance(oci_cache, dict) or not oci_cache.get("repository"):
@@ -267,6 +274,31 @@ def filter_symbol_graph(path, allowed_modules):
         f"{path.name}: {len(original_symbols)} -> {len(symbols)} symbols; "
         f"{len(original_relationships)} -> {len(relationships)} relationships"
     )
+
+
+def retain_symbol_graph_module(graph_directory, module_name):
+    # SwiftPM emits dependency graphs into the same directory. Use the graph's
+    # module metadata instead of its filename so extension graphs such as
+    # Module@Foundation.symbols.json remain part of the requested module.
+    retained = []
+    removed = []
+    for path in sorted(graph_directory.glob("*.symbols.json")):
+        with path.open(encoding="utf-8") as source:
+            graph = json.load(source)
+        if graph.get("module", {}).get("name") == module_name:
+            retained.append(path)
+        else:
+            path.unlink()
+            removed.append(path)
+    if not retained:
+        raise VersionedDocCError(
+            f"no symbol graphs for module {module_name} under {graph_directory}"
+        )
+    print(
+        f"{module_name}: retained {len(retained)} module symbol graph(s); "
+        f"removed {len(removed)} dependency symbol graph(s)"
+    )
+    return retained
 
 
 class PreparedSource:
@@ -692,6 +724,7 @@ def build_version(
             if not graph_path.is_file():
                 raise VersionedDocCError(f"missing symbol graph: {graph_path}")
             filter_symbol_graph(graph_path, set(config["allowedModules"]))
+            retain_symbol_graph_module(graph_directory, config["moduleName"])
 
             source_catalog = source_root / config["catalogPath"]
             if not source_catalog.is_dir():
@@ -791,6 +824,89 @@ def finalize_site(site_root, versions, current):
     print(f"{current}: injected {len(versions)} versions into {replacements} templates")
 
 
+def documentation_module(url):
+    marker = "/documentation/"
+    if not isinstance(url, str) or marker not in url:
+        return None
+    remainder = url.split(marker, 1)[1]
+    return remainder.split("/", 1)[0]
+
+
+def write_json(path, value):
+    path.write_text(
+        json.dumps(value, separators=(",", ":")) + "\n",
+        encoding="utf-8",
+    )
+
+
+def prune_site_to_module(site_root, module_path):
+    expected = module_path.casefold()
+    removed_entries = 0
+
+    for root, keep_names in (
+        (site_root / "documentation", {expected}),
+        (site_root / "data" / "documentation", {expected, f"{expected}.json"}),
+    ):
+        if not root.is_dir():
+            continue
+        for child in root.iterdir():
+            if child.name.casefold() in keep_names:
+                continue
+            ensure_safe_child(child, root, "dependency documentation")
+            if child.is_dir():
+                shutil.rmtree(child)
+            else:
+                child.unlink()
+            removed_entries += 1
+
+    index_path = site_root / "index" / "index.json"
+    if index_path.is_file():
+        with index_path.open(encoding="utf-8") as source:
+            index = json.load(source)
+        expected_path = f"/documentation/{module_path}".casefold()
+        languages = index.get("interfaceLanguages", {})
+        for language, modules in languages.items():
+            languages[language] = [
+                module
+                for module in modules
+                if module.get("path", "").rstrip("/").casefold() == expected_path
+            ]
+        write_json(index_path, index)
+
+    indexing_records_path = site_root / "indexing-records.json"
+    if indexing_records_path.is_file():
+        with indexing_records_path.open(encoding="utf-8") as source:
+            records = json.load(source)
+        records = [
+            record
+            for record in records
+            if (
+                (module := documentation_module(
+                    record.get("location", {}).get("reference", {}).get("url")
+                ))
+                is None
+                or module.casefold() == expected
+            )
+        ]
+        write_json(indexing_records_path, records)
+
+    linkable_entities_path = site_root / "linkable-entities.json"
+    if linkable_entities_path.is_file():
+        with linkable_entities_path.open(encoding="utf-8") as source:
+            entities = json.load(source)
+        entities = [
+            entity
+            for entity in entities
+            if (
+                (module := documentation_module(entity.get("referenceURL"))) is None
+                or module.casefold() == expected
+            )
+        ]
+        write_json(linkable_entities_path, entities)
+
+    print(f"{module_path}: removed {removed_entries} dependency documentation entries")
+
+
 def root_index(config):
     base = config["hostingBasePath"]
     default = config["defaultVersion"]
@@ -874,6 +990,9 @@ def assemble(package_root, config, versions, cache_root, output_path, build_date
         )
         version_output = output_path / version["name"]
         shutil.copytree(cache_entry / "site", version_output)
+        # Assembly also sanitizes older local and OCI caches created before
+        # dependency symbol graphs were excluded from DocC conversion.
+        prune_site_to_module(version_output, config["modulePath"])
         finalize_site(version_output, versions, version["name"])
     (output_path / "versions.json").write_text(
         json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8"
@@ -898,6 +1017,8 @@ def assemble(package_root, config, versions, cache_root, output_path, build_date
         config["projectName"],
         "--module-path",
         config["modulePath"],
+        "--page-size",
+        str(config["apiChanges"]["pageSize"]),
     ]
     for version in versions:
         api_command.extend(

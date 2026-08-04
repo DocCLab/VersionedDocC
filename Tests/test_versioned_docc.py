@@ -379,6 +379,59 @@ class VersionedDocCTests(unittest.TestCase):
 
         self.assertIsNone(snapshot["P.value"]["path"])
 
+    def test_api_changes_dashboard_restores_controls_from_url(self):
+        arguments = mock.Mock(
+            hosting_base_path="/DemoKit",
+            default_version="main",
+            module_path="demokit",
+            project_name="DemoKit",
+            build_date="2026-08-05",
+            page_size=17,
+        )
+        comparison = {
+            "id": "0.1.0-to-main",
+            "previousVersion": "0.1.0",
+            "currentVersion": "main",
+            "counts": {"added": 0, "modified": 0, "removed": 0},
+            "changes": [],
+        }
+
+        dashboard = api_changes.render_dashboard([comparison], arguments)
+
+        self.assertIn("function restoreState()", dashboard)
+        self.assertIn("function persistState()", dashboard)
+        self.assertIn("parameters.get('compare')", dashboard)
+        self.assertIn("parameters.get('show')", dashboard)
+        self.assertIn("parameters.get('search')", dashboard)
+        self.assertIn("const PAGE_SIZE=17", dashboard)
+        self.assertIn("window.addEventListener('pageshow',restoreAndRender)", dashboard)
+        self.assertIn("window.addEventListener('popstate',restoreAndRender)", dashboard)
+
+    def test_api_changes_page_size_defaults_and_accepts_business_configuration(self):
+        config = {
+            "schemaVersion": 1,
+            "projectName": "DemoKit",
+            "moduleName": "DemoKit",
+            "targetName": "DemoKit",
+            "catalogPath": "Sources/DemoKit/DemoKit.docc",
+            "hostingBasePath": "/DemoKit",
+            "versions": [
+                {"name": "main", "ref": "HEAD"},
+                {"name": "0.1.0", "ref": "0.1.0"},
+            ],
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = root / "VersionedDocC.json"
+            path.write_text(json.dumps(config), encoding="utf-8")
+            loaded, _ = versioned_docc.load_config(root, path)
+            self.assertEqual(loaded["apiChanges"]["pageSize"], 10)
+
+            config["apiChanges"] = {"pageSize": 25}
+            path.write_text(json.dumps(config), encoding="utf-8")
+            loaded, _ = versioned_docc.load_config(root, path)
+            self.assertEqual(loaded["apiChanges"]["pageSize"], 25)
+
     def test_filter_symbol_graph_removes_external_modules(self):
         graph = {
             "symbols": [
@@ -396,6 +449,115 @@ class VersionedDocCTests(unittest.TestCase):
             [item["identifier"]["precise"] for item in filtered["symbols"]],
             ["s:4Demo1PV"],
         )
+
+    def test_retain_symbol_graph_module_keeps_extension_graphs(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            fixtures = {
+                "OpenSwiftUI.symbols.json": "OpenSwiftUI",
+                "OpenSwiftUI@Foundation.symbols.json": "OpenSwiftUI",
+                "SwiftSyntax.symbols.json": "SwiftSyntax",
+            }
+            for name, module in fixtures.items():
+                (root / name).write_text(
+                    json.dumps({"module": {"name": module}}), encoding="utf-8"
+                )
+
+            retained = versioned_docc.retain_symbol_graph_module(root, "OpenSwiftUI")
+
+            self.assertEqual(
+                [path.name for path in retained],
+                ["OpenSwiftUI.symbols.json", "OpenSwiftUI@Foundation.symbols.json"],
+            )
+            self.assertFalse((root / "SwiftSyntax.symbols.json").exists())
+
+    def test_prune_site_to_module_removes_dependency_documentation_and_indexes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            site = Path(directory)
+            for path in (
+                site / "documentation" / "openswiftui" / "index.html",
+                site / "documentation" / "swiftsyntax" / "index.html",
+                site / "data" / "documentation" / "openswiftui" / "anchor.json",
+                site / "data" / "documentation" / "swiftsyntax" / "token.json",
+            ):
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text("fixture\n", encoding="utf-8")
+            for name in ("openswiftui.json", "swiftsyntax.json"):
+                (site / "data" / "documentation" / name).write_text(
+                    "{}\n", encoding="utf-8"
+                )
+
+            index_path = site / "index" / "index.json"
+            index_path.parent.mkdir()
+            index_path.write_text(
+                json.dumps(
+                    {
+                        "interfaceLanguages": {
+                            "swift": [
+                                {"path": "/documentation/openswiftui"},
+                                {"path": "/documentation/swiftsyntax"},
+                            ]
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+            indexing_records = [
+                {
+                    "location": {
+                        "reference": {
+                            "url": "doc://OpenSwiftUI/documentation/OpenSwiftUI/Anchor"
+                        }
+                    }
+                },
+                {
+                    "location": {
+                        "reference": {
+                            "url": "doc://OpenSwiftUI/documentation/SwiftSyntax/Token"
+                        }
+                    }
+                },
+                {
+                    "location": {
+                        "reference": {"url": "doc://OpenSwiftUI/tutorials/OpenSwiftUI"}
+                    }
+                },
+            ]
+            (site / "indexing-records.json").write_text(
+                json.dumps(indexing_records), encoding="utf-8"
+            )
+            entities = [
+                {
+                    "referenceURL": "doc://OpenSwiftUI/documentation/OpenSwiftUI/Anchor"
+                },
+                {
+                    "referenceURL": "doc://OpenSwiftUI/documentation/SwiftSyntax/Token"
+                },
+            ]
+            (site / "linkable-entities.json").write_text(
+                json.dumps(entities), encoding="utf-8"
+            )
+
+            versioned_docc.prune_site_to_module(site, "openswiftui")
+
+            self.assertTrue((site / "documentation" / "openswiftui").is_dir())
+            self.assertFalse((site / "documentation" / "swiftsyntax").exists())
+            self.assertTrue((site / "data" / "documentation" / "openswiftui").is_dir())
+            self.assertTrue((site / "data" / "documentation" / "openswiftui.json").is_file())
+            self.assertFalse((site / "data" / "documentation" / "swiftsyntax").exists())
+            self.assertFalse((site / "data" / "documentation" / "swiftsyntax.json").exists())
+            self.assertEqual(
+                json.loads(index_path.read_text())["interfaceLanguages"]["swift"],
+                [{"path": "/documentation/openswiftui"}],
+            )
+            self.assertEqual(
+                json.loads((site / "indexing-records.json").read_text()),
+                [indexing_records[0], indexing_records[2]],
+            )
+            self.assertEqual(
+                json.loads((site / "linkable-entities.json").read_text()),
+                [entities[0]],
+            )
 
 
 if __name__ == "__main__":

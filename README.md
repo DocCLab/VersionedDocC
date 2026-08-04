@@ -31,7 +31,7 @@ Add `VersionedDocC.json` to the package root:
 
 ```json
 {
-  "$schema": "https://raw.githubusercontent.com/OpenSwiftUIProject/VersionedDocC/0.0.4/Schema/VersionedDocC.schema.json",
+  "$schema": "https://raw.githubusercontent.com/OpenSwiftUIProject/VersionedDocC/0.0.5/Schema/VersionedDocC.schema.json",
   "schemaVersion": 1,
   "projectName": "ExampleKit",
   "moduleName": "ExampleKit",
@@ -52,6 +52,9 @@ Add `VersionedDocC.json` to the package root:
   "symbolGraph": {
     "minimumAccessLevel": "public",
     "skipProtocolImplementations": true
+  },
+  "apiChanges": {
+    "pageSize": 10
   }
 }
 ```
@@ -60,6 +63,9 @@ Add `VersionedDocC.json` to the package root:
 adds stable comparison baselines without duplicating a version already selected
 by `latest`. The example currently publishes `main`, the newest release, and
 `0.19.0`; a new release tag replaces only the automatically selected version.
+API Changes pages show 10 entries per page by default. Consumers can override
+the presentation-only value with `apiChanges.pageSize`; changing it reassembles
+the site without invalidating version documentation caches.
 
 Use an explicit `versions` array when a site needs fixed release snapshots:
 
@@ -84,7 +90,7 @@ Add VersionedDocC as a direct package dependency:
 ```swift
 .package(
     url: "https://github.com/OpenSwiftUIProject/VersionedDocC.git",
-    exact: "0.0.4"
+    exact: "0.0.5"
 )
 ```
 
@@ -175,7 +181,7 @@ history:
     fetch-depth: 0
 - uses: oras-project/setup-oras@v1
 - run: echo "${{ github.token }}" | oras login ghcr.io --username "${{ github.actor }}" --password-stdin
-- uses: OpenSwiftUIProject/VersionedDocC@0.0.4
+- uses: OpenSwiftUIProject/VersionedDocC@0.0.5
   with:
     config: VersionedDocC.json
     publish-oci-cache: true
@@ -186,7 +192,7 @@ OpenSwiftUIProject repositories can alternatively use the reusable workflow:
 ```yaml
 jobs:
   documentation:
-    uses: OpenSwiftUIProject/VersionedDocC/.github/workflows/pages.yml@0.0.4
+    uses: OpenSwiftUIProject/VersionedDocC/.github/workflows/pages.yml@0.0.5
     with:
       config: VersionedDocC.json
       artifact-path: .docs/build/versioned-site
