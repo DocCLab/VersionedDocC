@@ -43,7 +43,29 @@ def availability_labels(symbol):
     return labels[:6]
 
 
-def load_snapshot(path, module_path):
+def load_docc_urls(documentation_root):
+    urls = {}
+    if not documentation_root.is_dir():
+        return urls
+    for path in documentation_root.rglob("*.json"):
+        with path.open(encoding="utf-8") as source:
+            document = json.load(source)
+        precise = document.get("metadata", {}).get("externalID")
+        identifier = document.get("identifier", {}).get("url")
+        reference = document.get("references", {}).get(identifier, {})
+        url = reference.get("url")
+        if not precise or not isinstance(url, str):
+            continue
+        existing = urls.get(precise)
+        if existing is not None and existing != url:
+            raise ValueError(
+                f"conflicting DocC URLs for {precise}: {existing}, {url}"
+            )
+        urls[precise] = url
+    return urls
+
+
+def load_snapshot(path, module_path, documentation_urls=None):
     with path.open(encoding="utf-8") as source:
         graph = json.load(source)
     snapshot = {}
@@ -58,16 +80,21 @@ def load_snapshot(path, module_path):
             fragment.get("spelling", "")
             for fragment in raw.get("declarationFragments", [])
         )
-        suffix = "/".join(component.lower() for component in components)
+        precise = raw["identifier"]["precise"]
+        if documentation_urls is None:
+            suffix = "/".join(component.lower() for component in components)
+            documentation_path = f"/documentation/{module_path}/{suffix}"
+        else:
+            documentation_path = documentation_urls.get(precise)
         snapshot[identifier] = {
             "id": identifier,
-            "precise": raw["identifier"]["precise"],
+            "precise": precise,
             "title": raw.get("names", {}).get("title", components[-1]),
             "kind": raw.get("kind", {}).get("displayName", "Symbol"),
             "declaration": declaration,
             "pathComponents": components,
             "displayId": ".".join(components),
-            "path": f"/documentation/{module_path}/{suffix}",
+            "path": documentation_path,
             "availability": availability_labels(raw),
         }
     return snapshot
@@ -171,7 +198,7 @@ def render_dashboard(comparisons, arguments):
     function activeComparison() {{ return DATA.comparisons.find(item=>item.id===compare.value)||DATA.comparisons[0]; }}
     function symbol(change) {{ return change.current||change.previous; }}
     function visibleChanges(comparison) {{ const query=search.value.trim().toLowerCase(); return comparison.changes.filter(change=>{{ const item=symbol(change); return (filter.value==='all'||change.type===filter.value)&&(!query||(item.displayId+' '+item.declaration).toLowerCase().includes(query)); }}); }}
-    function card(change,comparison) {{ const item=symbol(change), linkVersion=change.type==='removed'?comparison.previousVersion:comparison.currentVersion, href=BASE+'/'+linkVersion+item.path; let declarations=''; if(change.type==='modified') declarations=`<div class="declaration"><span>Current · ${{escapeHTML(comparison.currentVersion)}}</span><code>+ ${{escapeHTML(change.current.declaration)}}</code></div><div class="declaration"><span>Previous · ${{escapeHTML(comparison.previousVersion)}}</span><code>− ${{escapeHTML(change.previous.declaration)}}</code></div>`; else declarations=`<div class="declaration"><span>${{escapeHTML(linkVersion)}}</span><code>${{escapeHTML(item.declaration)}}</code></div>`; const availability=item.availability?.length?`<p class="availability">${{escapeHTML(item.availability.join(' · '))}}</p>`:''; return `<article class="change-card ${{change.type}}"><header><span class="badge">${{change.type[0].toUpperCase()+change.type.slice(1)}}</span><span class="kind">${{escapeHTML(item.kind)}}</span></header><h2><a href="${{escapeHTML(href)}}">${{escapeHTML(item.title)}}</a></h2><p class="symbol-path">${{escapeHTML(item.displayId)}}</p>${{availability}}${{declarations}}<footer><a href="${{escapeHTML(href)}}">View documentation →</a></footer></article>`; }}
+    function card(change,comparison) {{ const item=symbol(change), linkVersion=change.type==='removed'?comparison.previousVersion:comparison.currentVersion, href=item.path?BASE+'/'+linkVersion+item.path:null, title=href?`<h2><a href="${{escapeHTML(href)}}">${{escapeHTML(item.title)}}</a></h2>`:`<h2>${{escapeHTML(item.title)}}</h2>`, documentationLink=href?`<footer><a href="${{escapeHTML(href)}}">View documentation →</a></footer>`:''; let declarations=''; if(change.type==='modified') declarations=`<div class="declaration"><span>Current · ${{escapeHTML(comparison.currentVersion)}}</span><code>+ ${{escapeHTML(change.current.declaration)}}</code></div><div class="declaration"><span>Previous · ${{escapeHTML(comparison.previousVersion)}}</span><code>− ${{escapeHTML(change.previous.declaration)}}</code></div>`; else declarations=`<div class="declaration"><span>${{escapeHTML(linkVersion)}}</span><code>${{escapeHTML(item.declaration)}}</code></div>`; const availability=item.availability?.length?`<p class="availability">${{escapeHTML(item.availability.join(' · '))}}</p>`:''; return `<article class="change-card ${{change.type}}"><header><span class="badge">${{change.type[0].toUpperCase()+change.type.slice(1)}}</span><span class="kind">${{escapeHTML(item.kind)}}</span></header>${{title}}<p class="symbol-path">${{escapeHTML(item.displayId)}}</p>${{availability}}${{declarations}}${{documentationLink}}</article>`; }}
     function render() {{ const comparison=activeComparison(), changes=visibleChanges(comparison), pages=Math.max(1,Math.ceil(changes.length/PAGE_SIZE)); page=Math.min(page,pages-1); const start=page*PAGE_SIZE, shown=changes.slice(start,start+PAGE_SIZE); document.getElementById('title').innerHTML=escapeHTML(comparison.previousVersion)+' <span>→</span> '+escapeHTML(comparison.currentVersion); document.getElementById('note').textContent=comparison.changes.length.toLocaleString()+' public API changes from real symbol graphs'; for(const type of ['added','modified','removed']) document.getElementById(type).textContent=comparison.counts[type].toLocaleString(); document.getElementById('result-count').textContent=changes.length?`Showing ${{start+1}}–${{start+shown.length}} of ${{changes.length.toLocaleString()}} changes`:'No matching changes'; document.getElementById('previous').disabled=page===0; document.getElementById('next').disabled=page>=pages-1; list.innerHTML=shown.map(change=>card(change,comparison)).join(''); document.getElementById('empty').hidden=changes.length!==0; }}
     compare.addEventListener('change',()=>{{page=0;render();}}); filter.addEventListener('change',()=>{{page=0;render();}}); search.addEventListener('input',()=>{{page=0;render();}}); document.getElementById('previous').addEventListener('click',()=>{{page--;render();scrollTo(0,0);}}); document.getElementById('next').addEventListener('click',()=>{{page++;render();scrollTo(0,0);}}); render();
   </script>
@@ -187,7 +214,12 @@ def main():
         if not separator:
             raise ValueError(f"invalid symbol graph specification: {specification}")
         versions.append(version)
-        snapshots[version] = load_snapshot(Path(raw_path), arguments.module_path)
+        documentation_urls = load_docc_urls(
+            arguments.output_root / version / "data" / "documentation"
+        )
+        snapshots[version] = load_snapshot(
+            Path(raw_path), arguments.module_path, documentation_urls
+        )
     comparisons = []
     for index in range(len(versions) - 1):
         current_version = versions[index]

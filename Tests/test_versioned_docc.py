@@ -323,6 +323,62 @@ class VersionedDocCTests(unittest.TestCase):
         self.assertEqual(comparison["counts"], {"added": 1, "modified": 0, "removed": 0})
         self.assertEqual(comparison["changes"][0]["current"]["displayId"], "P.accentColor")
 
+    def test_api_changes_use_docc_canonical_url_for_overloaded_symbol(self):
+        precise = "s:7DemoKit1PV6valueSivp"
+        identifier = "doc://DemoKit/documentation/DemoKit/P/value-1a2b3"
+        graph = {
+            "symbols": [
+                {
+                    "identifier": {"precise": precise},
+                    "pathComponents": ["P", "value"],
+                    "names": {"title": "value"},
+                }
+            ]
+        }
+        document = {
+            "identifier": {"url": identifier},
+            "metadata": {"externalID": precise},
+            "references": {
+                identifier: {
+                    "url": "/documentation/demokit/p/value-1a2b3",
+                }
+            },
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            graph_path = root / "DemoKit.symbols.json"
+            graph_path.write_text(json.dumps(graph), encoding="utf-8")
+            documentation_root = root / "data" / "documentation"
+            documentation_root.mkdir(parents=True)
+            (documentation_root / "value-1a2b3.json").write_text(
+                json.dumps(document), encoding="utf-8"
+            )
+
+            urls = api_changes.load_docc_urls(documentation_root)
+            snapshot = api_changes.load_snapshot(graph_path, "demokit", urls)
+
+        self.assertEqual(
+            snapshot["P.value"]["path"],
+            "/documentation/demokit/p/value-1a2b3",
+        )
+
+    def test_api_changes_omit_link_without_docc_canonical_url(self):
+        graph = {
+            "symbols": [
+                {
+                    "identifier": {"precise": "s:7DemoKit1PV5valueSivp"},
+                    "pathComponents": ["P", "value"],
+                    "names": {"title": "value"},
+                }
+            ]
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            graph_path = Path(directory) / "DemoKit.symbols.json"
+            graph_path.write_text(json.dumps(graph), encoding="utf-8")
+            snapshot = api_changes.load_snapshot(graph_path, "demokit", {})
+
+        self.assertIsNone(snapshot["P.value"]["path"])
+
     def test_filter_symbol_graph_removes_external_modules(self):
         graph = {
             "symbols": [
