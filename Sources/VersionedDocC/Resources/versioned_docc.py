@@ -18,7 +18,7 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 
-VERSION = "0.0.5"
+VERSION = "0.0.6"
 DEFAULT_CONFIG = ".vdc.json"
 # Keep this stable across releases that only change assembly, routing, or the
 # command interface. Bump it only when the per-version DocC cache contents must
