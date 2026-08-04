@@ -4,6 +4,7 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 RESOURCE_ROOT = Path(__file__).parents[1] / "Sources" / "VersionedDocC" / "Resources"
@@ -21,6 +22,103 @@ api_changes = load_module("api_changes")
 
 
 class VersionedDocCTests(unittest.TestCase):
+    def test_release_policy_combines_latest_and_pinned_versions(self):
+        config = {
+            "defaultVersion": "main",
+            "releasePolicy": {
+                "latest": 1,
+                "development": {"name": "main", "ref": "HEAD"},
+                "pinned": ["0.19.0"],
+            },
+        }
+        with mock.patch.object(versioned_docc, "semantic_versions", return_value=["0.20.1"]):
+            versions = versioned_docc.configured_versions(Path("/unused"), config)
+
+        self.assertEqual(
+            versions,
+            [
+                {"name": "main", "ref": "HEAD"},
+                {"name": "0.20.1", "ref": "0.20.1"},
+                {"name": "0.19.0", "ref": "0.19.0"},
+            ],
+        )
+
+    def test_release_policy_deduplicates_latest_pinned_version(self):
+        config = {
+            "defaultVersion": "main",
+            "releasePolicy": {
+                "latest": 1,
+                "pinned": ["0.20.1"],
+            },
+        }
+        with mock.patch.object(versioned_docc, "semantic_versions", return_value=["0.20.1"]):
+            versions = versioned_docc.configured_versions(Path("/unused"), config)
+
+        self.assertEqual(
+            versions,
+            [
+                {"name": "main", "ref": "HEAD"},
+                {"name": "0.20.1", "ref": "0.20.1"},
+            ],
+        )
+
+    def test_tool_release_does_not_invalidate_build_cache(self):
+        config = {
+            "targetName": "DemoKit",
+            "moduleName": "DemoKit",
+            "catalogPath": "Sources/DemoKit/DemoKit.docc",
+            "environment": {},
+            "buildArguments": [],
+            "doccArguments": [],
+            "symbolGraph": {},
+            "allowedModules": ["DemoKit"],
+        }
+        with (
+            mock.patch.object(versioned_docc, "run", return_value="Swift fixture"),
+            mock.patch.object(versioned_docc, "sha256_file", return_value="docc fixture"),
+        ):
+            before = versioned_docc.build_fingerprint(config, Path("/docc"), "header")
+            with mock.patch.object(versioned_docc, "VERSION", "99.0.0"):
+                after = versioned_docc.build_fingerprint(config, Path("/docc"), "header")
+
+        self.assertEqual(before, after)
+
+    def test_github_pages_fallback_redirects_legacy_path_to_default_version(self):
+        config = {
+            "hostingBasePath": "/DemoKit",
+            "defaultVersion": "main",
+            "modulePath": "demokit",
+            "projectName": "DemoKit",
+        }
+        fallback = versioned_docc.github_pages_fallback(config)
+
+        self.assertIn('const legacyRoot = "/DemoKit/documentation";', fallback)
+        self.assertIn('const versionedRoot = "/DemoKit/main/documentation";', fallback)
+        self.assertIn("window.location.search + window.location.hash", fallback)
+        self.assertIn("window.location.replace(target)", fallback)
+        self.assertIn("data-versioned-docc-pages-fallback", fallback)
+
+    def test_legacy_routing_files_cover_project_and_deploy_roots(self):
+        config = {
+            "hostingBasePath": "/DemoKit",
+            "defaultVersion": "main",
+            "modulePath": "demokit",
+            "projectName": "DemoKit",
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            deploy_root = Path(directory)
+            output_path = deploy_root / "DemoKit"
+            output_path.mkdir()
+            versioned_docc.write_legacy_routing_files(output_path, config)
+
+            for root in (deploy_root, output_path):
+                self.assertTrue((root / "404.html").is_file())
+                self.assertEqual(
+                    (root / "_redirects").read_text(),
+                    "/DemoKit/documentation/* "
+                    "/DemoKit/main/documentation/:splat 301\n",
+                )
+
     def test_prepared_source_uses_clones_without_registering_worktrees(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -34,6 +132,10 @@ class VersionedDocCTests(unittest.TestCase):
                 )
                 subprocess.run(
                     ["git", "-C", str(repository), "config", "user.name", "VersionedDocC Tests"],
+                    check=True,
+                )
+                subprocess.run(
+                    ["git", "-C", str(repository), "config", "commit.gpgsign", "false"],
                     check=True,
                 )
 

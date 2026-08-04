@@ -18,8 +18,8 @@ and `docc` executables. It does not fork Swift-DocC or Swift-DocC Render.
 - Immutable per-version caches with source, toolchain, renderer, and build
   configuration fingerprints.
 - Exact historical local dependencies from each tag's `Package.resolved`.
-- A single provider-style wildcard redirect from legacy documentation URLs to
-  the configured default version.
+- A single provider-style wildcard redirect plus a GitHub Pages `404.html`
+  fallback from legacy documentation URLs to the configured default version.
 - A SwiftPM command plugin, standalone executable, composite GitHub Action,
   and reusable Pages workflow.
 
@@ -29,7 +29,7 @@ Add `VersionedDocC.json` to the package root:
 
 ```json
 {
-  "$schema": "https://raw.githubusercontent.com/OpenSwiftUIProject/VersionedDocC/0.0.1/Schema/VersionedDocC.schema.json",
+  "$schema": "https://raw.githubusercontent.com/OpenSwiftUIProject/VersionedDocC/0.0.2/Schema/VersionedDocC.schema.json",
   "schemaVersion": 1,
   "projectName": "ExampleKit",
   "moduleName": "ExampleKit",
@@ -39,7 +39,8 @@ Add `VersionedDocC.json` to the package root:
   "hostingBasePath": "/ExampleKit",
   "defaultVersion": "main",
   "releasePolicy": {
-    "latest": 2,
+    "latest": 1,
+    "pinned": ["0.19.0"],
     "development": { "name": "main", "ref": "HEAD" }
   },
   "sourceRepository": "https://github.com/Example/ExampleKit",
@@ -49,6 +50,11 @@ Add `VersionedDocC.json` to the package root:
   }
 }
 ```
+
+`latest` follows the newest semantic-version Git tags automatically. `pinned`
+adds stable comparison baselines without duplicating a version already selected
+by `latest`. The example currently publishes `main`, the newest release, and
+`0.19.0`; a new release tag replaces only the automatically selected version.
 
 Use an explicit `versions` array when a site needs fixed release snapshots:
 
@@ -73,7 +79,7 @@ Add VersionedDocC as a direct package dependency:
 ```swift
 .package(
     url: "https://github.com/OpenSwiftUIProject/VersionedDocC.git",
-    exact: "0.0.1"
+    exact: "0.0.2"
 )
 ```
 
@@ -110,6 +116,21 @@ The standalone executable accepts the same commands:
 swift run VersionedDocC build --package-path /path/to/package
 ```
 
+## Historical URL compatibility
+
+VersionedDocC emits two constant-size compatibility mechanisms:
+
+- `_redirects` gives providers that support wildcard rules, and the local
+  preview server, a real HTTP `301`.
+- A root `404.html` lets GitHub Pages preserve the requested path and replace
+  `/<project>/documentation/...` with
+  `/<project>/<default-version>/documentation/...` in the browser.
+
+The Pages fallback is one file for the whole documentation tree; it does not
+generate a redirect page for every DocC symbol. GitHub Pages has already
+returned `404` before this page runs, so this fallback provides browser and
+link compatibility but is not equivalent to an edge/server-side `301` for SEO.
+
 ## GitHub Actions
 
 Repositories can call the composite action after checking out full tag
@@ -119,7 +140,7 @@ history:
 - uses: actions/checkout@v7
   with:
     fetch-depth: 0
-- uses: OpenSwiftUIProject/VersionedDocC@0.0.1
+- uses: OpenSwiftUIProject/VersionedDocC@0.0.2
   with:
     config: VersionedDocC.json
 ```
@@ -129,7 +150,7 @@ OpenSwiftUIProject repositories can alternatively use the reusable workflow:
 ```yaml
 jobs:
   documentation:
-    uses: OpenSwiftUIProject/VersionedDocC/.github/workflows/pages.yml@0.0.1
+    uses: OpenSwiftUIProject/VersionedDocC/.github/workflows/pages.yml@0.0.2
     with:
       config: VersionedDocC.json
       artifact-path: .docs/build/versioned-site
@@ -151,6 +172,12 @@ Adding a release builds only a cache miss. Updating the published version list
 only reassembles the selector and API Changes pages; cached Swift and DocC
 builds do not rerun. Changing a toolchain, renderer, symbol-graph policy, or
 other build input invalidates the affected artifacts through the fingerprint.
+VersionedDocC's package version is intentionally separate from that build-cache
+revision, so assembly-only changes do not invalidate historical documentation.
+
+The reusable workflow persists this directory with GitHub Actions cache. Its
+rolling key restores the previous site cache on a new tag, builds missing
+versions, then saves the expanded cache under the new commit key.
 
 ## Requirements
 

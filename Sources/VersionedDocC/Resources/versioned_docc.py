@@ -16,7 +16,11 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 
-VERSION = "0.0.1"
+VERSION = "0.0.2"
+# Keep this stable across releases that only change assembly, routing, or the
+# command interface. Bump it only when the per-version DocC cache contents must
+# be regenerated. Its initial value preserves 0.0.1 cache fingerprints.
+BUILD_CACHE_REVISION = "0.0.1"
 SEMVER = re.compile(r"^v?(\d+)\.(\d+)\.(\d+)(?:[-+].*)?$")
 OPTIONS_TOKEN = "__VERSIONED_DOCC_VERSION_OPTIONS__"
 
@@ -149,9 +153,17 @@ def configured_versions(repository, config):
         policy = config.get("releasePolicy", {"latest": 2})
         development = policy.get("development", {"name": "main", "ref": "HEAD"})
         versions = [development]
+        selected_tags = semantic_versions(repository, int(policy.get("latest", 2)))
+        selected_names = {tag.lstrip("v") for tag in selected_tags}
+        for tag in policy.get("pinned", []):
+            if not isinstance(tag, str) or not SEMVER.fullmatch(tag):
+                raise VersionedDocCError(f"invalid pinned release: {tag}")
+            if tag.lstrip("v") not in selected_names:
+                selected_tags.append(tag)
+                selected_names.add(tag.lstrip("v"))
         versions.extend(
             {"name": tag.lstrip("v"), "ref": tag}
-            for tag in semantic_versions(repository, int(policy.get("latest", 2)))
+            for tag in selected_tags
         )
     names = set()
     normalized = []
@@ -324,7 +336,7 @@ def build_fingerprint(config, docc_binary, header_template):
     else:
         renderer_id = "bundled"
     payload = {
-        "versionedDocC": VERSION,
+        "versionedDocC": BUILD_CACHE_REVISION,
         "swift": run(["swift", "--version"], capture=True),
         "docc": sha256_file(docc_binary),
         "renderer": renderer_id,
@@ -524,6 +536,50 @@ def root_index(config):
 </head><body><p>Opening <a href="{html.escape(target)}">{html.escape(config['projectName'])} documentation</a>.</p></body></html>\n"""
 
 
+def github_pages_fallback(config):
+    base = config["hostingBasePath"]
+    default = config["defaultVersion"]
+    module_path = config["modulePath"]
+    legacy_root = f"{base}/documentation"
+    versioned_root = f"{base}/{default}/documentation"
+    documentation_root = f"{versioned_root}/{module_path}/"
+    return f"""<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex"><title>Page moved | {html.escape(config['projectName'])} Documentation</title>
+<script data-versioned-docc-pages-fallback>
+(() => {{
+  const legacyRoot = {json.dumps(legacy_root)};
+  const versionedRoot = {json.dumps(versioned_root)};
+  const path = window.location.pathname;
+  if (path === legacyRoot || path.startsWith(legacyRoot + "/")) {{
+    const suffix = path.slice(legacyRoot.length) || "/";
+    const target = versionedRoot + suffix + window.location.search + window.location.hash;
+    const canonical = document.createElement("link");
+    canonical.rel = "canonical";
+    canonical.href = target;
+    document.head.appendChild(canonical);
+    window.location.replace(target);
+  }}
+}})();
+</script></head><body><h1>Page not found</h1>
+<p>This documentation URL may have moved. Open <a href="{html.escape(documentation_root)}">{html.escape(config['projectName'])} documentation</a>.</p>
+</body></html>\n"""
+
+
+def write_legacy_routing_files(output_path, config):
+    redirect = (
+        f"{config['hostingBasePath']}/documentation/* "
+        f"{config['hostingBasePath']}/{config['defaultVersion']}/documentation/:splat 301\n"
+    )
+    fallback = github_pages_fallback(config)
+    # output_path is convenient for workflows that upload the project site
+    # directly. output_path.parent is the deploy root used when hostingBasePath
+    # is represented as a physical directory, as in the local preview.
+    for root in (output_path, output_path.parent):
+        (root / "_redirects").write_text(redirect, encoding="utf-8")
+        (root / "404.html").write_text(fallback, encoding="utf-8")
+
+
 def assemble(package_root, config, versions, cache_root, output_path, build_date):
     output_parent = output_path.parent
     output_parent.mkdir(parents=True, exist_ok=True)
@@ -555,11 +611,7 @@ def assemble(package_root, config, versions, cache_root, output_path, build_date
         json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )
     (output_path / "index.html").write_text(root_index(config), encoding="utf-8")
-    redirect = (
-        f"{config['hostingBasePath']}/documentation/* "
-        f"{config['hostingBasePath']}/{config['defaultVersion']}/documentation/:splat 301\n"
-    )
-    (output_path / "_redirects").write_text(redirect, encoding="utf-8")
+    write_legacy_routing_files(output_path, config)
     (output_path / ".nojekyll").touch()
 
     api_script = Path(__file__).with_name("api_changes.py")
