@@ -125,25 +125,30 @@ class VersionedDocCTests(unittest.TestCase):
                 "b" * 64,
             )
 
-    def test_oci_cache_descriptor_must_use_versioned_docc_artifact_type(self):
-        descriptor = {
+    def test_oci_cache_manifest_must_use_versioned_docc_artifact_type(self):
+        manifest = {
             "artifactType": versioned_docc.OCI_ARTIFACT_TYPE,
-            "digest": "sha256:" + "a" * 64,
+            "config": {"digest": "sha256:" + "a" * 64},
         }
         result = mock.Mock(
             returncode=0,
-            stdout=json.dumps(descriptor),
+            stdout=json.dumps(manifest),
             stderr="",
         )
-        with mock.patch.object(versioned_docc, "run_status", return_value=result):
+        with mock.patch.object(
+            versioned_docc, "run_status", return_value=result
+        ) as run_status:
             self.assertTrue(
                 versioned_docc.oci_artifact_exists(
                     "oras", "ghcr.io/example/cache", "tag"
                 )
             )
+        run_status.assert_called_once_with(
+            ["oras", "manifest", "fetch", "ghcr.io/example/cache:tag"]
+        )
 
-        descriptor["artifactType"] = "application/vnd.example.other"
-        result.stdout = json.dumps(descriptor)
+        manifest["artifactType"] = "application/vnd.example.other"
+        result.stdout = json.dumps(manifest)
         with (
             mock.patch.object(versioned_docc, "run_status", return_value=result),
             self.assertRaisesRegex(

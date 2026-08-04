@@ -18,7 +18,7 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 
-VERSION = "0.0.3"
+VERSION = "0.0.4"
 # Keep this stable across releases that only change assembly, routing, or the
 # command interface. Bump it only when the per-version DocC cache contents must
 # be regenerated. Its initial value preserves 0.0.1 cache fingerprints.
@@ -436,17 +436,17 @@ def find_oras():
 def oci_artifact_exists(oras, repository, tag):
     target_options, target = oci_target(repository, tag)
     result = run_status(
-        [oras, "manifest", "fetch", "--descriptor", *target_options, target]
+        [oras, "manifest", "fetch", *target_options, target]
     )
     if result.returncode == 0:
         try:
-            descriptor = json.loads(result.stdout)
+            manifest = json.loads(result.stdout)
         except json.JSONDecodeError as error:
-            raise VersionedDocCError(f"invalid OCI descriptor: {target}") from error
-        if descriptor.get("artifactType") != OCI_ARTIFACT_TYPE:
+            raise VersionedDocCError(f"invalid OCI manifest: {target}") from error
+        if manifest.get("artifactType") != OCI_ARTIFACT_TYPE:
             raise VersionedDocCError(
                 f"unexpected OCI artifact type for {target}: "
-                f"{descriptor.get('artifactType')}"
+                f"{manifest.get('artifactType')}"
             )
         return True
     details = f"{result.stdout}\n{result.stderr}".lower()

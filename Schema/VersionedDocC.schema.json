@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://raw.githubusercontent.com/OpenSwiftUIProject/VersionedDocC/0.0.3/Schema/VersionedDocC.schema.json",
+  "$id": "https://raw.githubusercontent.com/OpenSwiftUIProject/VersionedDocC/0.0.4/Schema/VersionedDocC.schema.json",
   "title": "VersionedDocC configuration",
   "type": "object",
   "required": [
