@@ -23,6 +23,21 @@ api_changes = load_module("api_changes")
 
 
 class VersionedDocCTests(unittest.TestCase):
+    def test_default_build_date_uses_utc_timezone(self):
+        base_datetime = versioned_docc.dt.datetime
+        observed_timezones = []
+
+        class FixedDateTime(base_datetime):
+            @classmethod
+            def now(cls, timezone):
+                observed_timezones.append(timezone)
+                return cls(2026, 8, 5, 23, 59, 59)
+
+        with mock.patch.object(versioned_docc.dt, "datetime", FixedDateTime):
+            self.assertEqual(versioned_docc.default_build_date(), "2026-08-05")
+
+        self.assertEqual(observed_timezones, [versioned_docc.dt.timezone.utc])
+
     def test_oci_cache_tag_is_content_specific(self):
         version = {"name": "0.20.1", "ref": "0.20.1"}
         first = versioned_docc.oci_cache_tag(version, "a" * 40, "b" * 64)

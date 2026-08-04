@@ -53,7 +53,7 @@ Add `.vdc.json` to the package root:
 
 ```json
 {
-  "$schema": "https://raw.githubusercontent.com/OpenSwiftUIProject/VersionedDocC/0.0.8/Schema/VersionedDocC.schema.json",
+  "$schema": "https://raw.githubusercontent.com/OpenSwiftUIProject/VersionedDocC/0.0.9/Schema/VersionedDocC.schema.json",
   "schemaVersion": 1,
   "projectName": "ExampleKit",
   "moduleName": "ExampleKit",
@@ -180,7 +180,7 @@ Add VersionedDocC as a direct package dependency:
 ```swift
 .package(
     url: "https://github.com/OpenSwiftUIProject/VersionedDocC.git",
-    exact: "0.0.8"
+    exact: "0.0.9"
 )
 ```
 
@@ -271,7 +271,7 @@ history:
     fetch-depth: 0
 - uses: oras-project/setup-oras@v1
 - run: echo "${{ github.token }}" | oras login ghcr.io --username "${{ github.actor }}" --password-stdin
-- uses: OpenSwiftUIProject/VersionedDocC@0.0.8
+- uses: OpenSwiftUIProject/VersionedDocC@0.0.9
   with:
     config: .vdc.json
     publish-oci-cache: true
@@ -282,7 +282,7 @@ OpenSwiftUIProject repositories can alternatively use the reusable workflow:
 ```yaml
 jobs:
   documentation:
-    uses: OpenSwiftUIProject/VersionedDocC/.github/workflows/pages.yml@0.0.8
+    uses: OpenSwiftUIProject/VersionedDocC/.github/workflows/pages.yml@0.0.9
     with:
       config: .vdc.json
       artifact-path: .docs/build/versioned-site

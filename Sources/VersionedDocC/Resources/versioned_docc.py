@@ -18,7 +18,7 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 
-VERSION = "0.0.8"
+VERSION = "0.0.9"
 DEFAULT_CONFIG = ".vdc.json"
 # Keep this stable across releases that only change assembly, routing, or the
 # command interface. Bump it only when the per-version DocC cache contents must
@@ -34,6 +34,10 @@ OCI_ARCHIVE_NAME = "versioned-docc-cache.tar.gz"
 
 class VersionedDocCError(RuntimeError):
     pass
+
+
+def default_build_date():
+    return dt.datetime.now(dt.timezone.utc).date().isoformat()
 
 
 def run(command, cwd=None, environment=None, capture=False, log_path=None):
@@ -1242,7 +1246,7 @@ def build_command(arguments):
     cache_root.mkdir(parents=True, exist_ok=True)
     logs_root = docs_root / "logs" / "versioned-docc"
     logs_root.mkdir(parents=True, exist_ok=True)
-    build_date = arguments.build_date or os.environ.get("DOCS_BUILD_DATE") or dt.datetime.now(dt.UTC).date().isoformat()
+    build_date = arguments.build_date or os.environ.get("DOCS_BUILD_DATE") or default_build_date()
     if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", build_date):
         raise VersionedDocCError("build date must use YYYY-MM-DD")
     header_template = Path(__file__).with_name("header.html").read_text(encoding="utf-8")
