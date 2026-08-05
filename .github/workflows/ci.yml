@@ -2,13 +2,27 @@ name: CI
 
 on:
   push:
+    branches:
+      - "**"
   pull_request:
+  workflow_call:
+    inputs:
+      ref:
+        description: Git ref to test
+        required: false
+        type: string
+        default: ""
+
+permissions:
+  contents: read
 
 jobs:
   test:
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref || github.ref }}
       - run: swift build
       - run: swift run VersionedDocC --version
       - run: python3 -m unittest discover -s Tests -p 'test_*.py'
