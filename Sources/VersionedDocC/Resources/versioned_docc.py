@@ -18,7 +18,7 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 
-VERSION = "0.0.10"
+VERSION = "0.0.11"
 DEFAULT_CONFIG = ".vdc.json"
 # Keep this stable across releases that only change assembly, routing, or the
 # command interface. Bump it only when the per-version DocC cache contents must
@@ -137,7 +137,13 @@ def load_config(package_root, config_path):
         config = json.load(source)
     if config.get("schemaVersion") != 1:
         raise VersionedDocCError("configuration schemaVersion must be 1")
-    required = ["projectName", "moduleName", "targetName", "catalogPath", "hostingBasePath"]
+    documentation_only = config.setdefault("documentationOnly", False)
+    if not isinstance(documentation_only, bool):
+        raise VersionedDocCError("documentationOnly must be a boolean")
+    required = ["projectName", "catalogPath", "hostingBasePath"]
+    required.extend(
+        ["modulePath"] if documentation_only else ["moduleName", "targetName"]
+    )
     missing = [key for key in required if not config.get(key)]
     if missing:
         raise VersionedDocCError(f"missing configuration keys: {', '.join(missing)}")
@@ -145,7 +151,8 @@ def load_config(package_root, config_path):
     if not re.fullmatch(r"(?:/[A-Za-z0-9._-]+)+", base_path):
         raise VersionedDocCError(f"invalid hostingBasePath: {base_path}")
     config["hostingBasePath"] = base_path
-    config.setdefault("modulePath", config["moduleName"].lower())
+    if not documentation_only:
+        config.setdefault("modulePath", config["moduleName"].lower())
     config.setdefault("defaultVersion", "main")
     config.setdefault("outputPath", f".docs/build/versioned-site{base_path}")
     config.setdefault("cachePath", ".docs/cache/versioned-docc")
@@ -153,7 +160,10 @@ def load_config(package_root, config_path):
     config.setdefault("doccArguments", ["--emit-digest"])
     config.setdefault("environment", {})
     config.setdefault("localDependencies", {})
-    config.setdefault("allowedModules", [config["moduleName"]])
+    config.setdefault(
+        "allowedModules",
+        [config["modulePath"] if documentation_only else config["moduleName"]],
+    )
     historical_catalog_fallback = config.get("historicalCatalogFallback")
     if historical_catalog_fallback not in (None, "current"):
         raise VersionedDocCError(
@@ -225,6 +235,12 @@ def load_config(package_root, config_path):
     page_size = config["apiChanges"]["pageSize"]
     if isinstance(page_size, bool) or not isinstance(page_size, int) or page_size < 1:
         raise VersionedDocCError("apiChanges.pageSize must be a positive integer")
+    config.setdefault("articleChanges", {})
+    if not isinstance(config["articleChanges"], dict):
+        raise VersionedDocCError("articleChanges must be an object")
+    config["articleChanges"].setdefault("enabled", False)
+    if not isinstance(config["articleChanges"]["enabled"], bool):
+        raise VersionedDocCError("articleChanges.enabled must be a boolean")
     if "ociCache" in config:
         oci_cache = config["ociCache"]
         if not isinstance(oci_cache, dict) or not oci_cache.get("repository"):
@@ -382,7 +398,15 @@ def configured_versions(repository, config):
         if name in names:
             raise VersionedDocCError(f"duplicate version name: {name}")
         names.add(name)
-        normalized.append({"name": name, "ref": ref})
+        normalized_version = {"name": name, "ref": ref}
+        source_ref = item.get("sourceRef")
+        if source_ref is not None:
+            if not isinstance(source_ref, str) or not source_ref:
+                raise VersionedDocCError(
+                    f"sourceRef for {name} must be a non-empty string"
+                )
+            normalized_version["sourceRef"] = source_ref
+        normalized.append(normalized_version)
     if config["defaultVersion"] not in names:
         raise VersionedDocCError(
             f"defaultVersion {config['defaultVersion']} isn't in the version list"
@@ -542,13 +566,27 @@ class PreparedSource:
             shutil.rmtree(self.temporary_root, ignore_errors=True)
 
 
+def article_changes_enabled(config):
+    return config.get("articleChanges", {}).get("enabled", False)
+
+
+def changes_enabled(config):
+    return not config["documentationOnly"] or article_changes_enabled(config)
+
+
 def render_header(template, config, version, build_date):
     base = config["hostingBasePath"]
     module_path = config["modulePath"]
     replacements = {
         "__VERSIONED_DOCC_PROJECT_NAME__": config["projectName"],
         "__VERSIONED_DOCC_HOME_PATH__": f"{base}/{version}/documentation/{module_path}/",
-        "__VERSIONED_DOCC_CHANGES_PATH__": f"{base}/{config['defaultVersion']}/changes/",
+        "__VERSIONED_DOCC_CHANGES_LINK__": (
+            f'<a class="versioned-docc-changes" '
+            f'href="{base}/{config["defaultVersion"]}/changes/">'
+            f'{"Changes" if article_changes_enabled(config) else "API Changes"}</a>'
+        )
+        if changes_enabled(config)
+        else "",
         "__VERSIONED_DOCC_BUILD_DATE__": build_date,
         "__VERSIONED_DOCC_CURRENT_VERSION__": version,
     }
@@ -573,8 +611,9 @@ def build_fingerprint(config, docc_binary, header_template):
         "docc": sha256_file(docc_binary),
         "renderer": renderer_id,
         "header": sha256_bytes(header_template.encode()),
-        "target": config["targetName"],
-        "module": config["moduleName"],
+        "documentationOnly": config.get("documentationOnly", False),
+        "target": config.get("targetName"),
+        "module": config.get("moduleName"),
         "catalog": config["catalogPath"],
         "environment": config["environment"],
         "buildArguments": config["buildArguments"],
@@ -583,14 +622,24 @@ def build_fingerprint(config, docc_binary, header_template):
         "allowedModules": config["allowedModules"],
         "historicalCatalogFallback": config.get("historicalCatalogFallback"),
     }
+    if article_changes_enabled(config):
+        payload["articleChanges"] = True
     return sha256_bytes(json.dumps(payload, sort_keys=True).encode())
 
 
-def cache_valid(cache_entry, commit, fingerprint, module_name):
+def cache_valid(cache_entry, commit, fingerprint, module_name=None):
     metadata_path = cache_entry / "metadata.json"
     site_path = cache_entry / "site" / "index.html"
-    graph_paths = module_symbol_graph_paths(cache_entry / "symbols", module_name)
-    if not metadata_path.is_file() or not graph_paths or not site_path.is_file():
+    graph_paths = (
+        module_symbol_graph_paths(cache_entry / "symbols", module_name)
+        if module_name
+        else []
+    )
+    if (
+        not metadata_path.is_file()
+        or (module_name and not graph_paths)
+        or not site_path.is_file()
+    ):
         return False
     with metadata_path.open(encoding="utf-8") as source:
         metadata = json.load(source)
@@ -767,7 +816,7 @@ def restore_oci_cache(
         if not archive_path.is_file():
             raise VersionedDocCError(f"OCI cache has no {OCI_ARCHIVE_NAME}: {reference}")
         extract_cache_archive(archive_path, staging)
-        if not cache_valid(staging, commit, fingerprint, config["moduleName"]):
+        if not cache_valid(staging, commit, fingerprint, config.get("moduleName")):
             raise VersionedDocCError(f"OCI cache metadata mismatch: {reference}")
         cache_entry = cache_root / version["name"]
         remove_tree(cache_entry, cache_root, "version cache")
@@ -833,6 +882,84 @@ def publish_oci_cache(
     return True
 
 
+def build_symbol_graphs(source_root, config, version, graph_root, logs_root):
+    platforms = configured_symbol_graph_platforms(config)
+    graph_builds = (
+        [
+            (
+                platform,
+                graph_root / f"{index:02d}-{platform_slug(platform['name'])}",
+            )
+            for index, platform in enumerate(platforms)
+        ]
+        if platforms
+        else [(None, graph_root)]
+    )
+    for platform, graph_directory in graph_builds:
+        graph_directory.mkdir(parents=True, exist_ok=True)
+        platform_arguments = []
+        log_suffix = ""
+        if platform is not None:
+            print(f"Building {version['name']} [{platform['name']}]")
+            log_suffix = f"-{platform_slug(platform['name'])}"
+            platform_arguments.extend(["--triple", platform["triple"]])
+            sdk = resolve_platform_sdk(platform)
+            if sdk:
+                platform_arguments.extend(["--sdk", sdk])
+            swift_sdk = platform.get("swiftSDK")
+            if swift_sdk:
+                platform_arguments.extend(["--swift-sdk", swift_sdk])
+            platform_arguments.extend(platform["buildArguments"])
+        build_command = [
+            "swift",
+            "build",
+            # Command plugins already run inside SwiftPM's sandbox. A nested
+            # swift build can't apply a second sandbox profile.
+            "--disable-sandbox",
+            "--package-path",
+            str(source_root),
+            "--target",
+            config["targetName"],
+            *config["buildArguments"],
+            *platform_arguments,
+            "-Xswiftc",
+            "-emit-symbol-graph",
+            "-Xswiftc",
+            "-emit-symbol-graph-dir",
+            "-Xswiftc",
+            str(graph_directory),
+            "-Xswiftc",
+            "-symbol-graph-minimum-access-level",
+            "-Xswiftc",
+            config["symbolGraph"]["minimumAccessLevel"],
+        ]
+        if config["symbolGraph"].get("emitExtensionBlocks", False):
+            build_command.extend(["-Xswiftc", "-emit-extension-block-symbols"])
+        if config["symbolGraph"].get("skipProtocolImplementations", True):
+            # Force the symbol-graph option through SwiftPM's driver. Passing it
+            # as a plain driver option doesn't reach the frontend emit-module job.
+            build_command.extend(
+                [
+                    "-Xswiftc",
+                    "-Xfrontend",
+                    "-Xswiftc",
+                    "-skip-protocol-implementations",
+                ]
+            )
+        run(
+            build_command,
+            environment=config["environment"],
+            log_path=logs_root
+            / f"{version['name']}{log_suffix}-swift-build.log",
+        )
+        graph_path = graph_directory / f"{config['moduleName']}.symbols.json"
+        if not graph_path.is_file():
+            raise VersionedDocCError(f"missing symbol graph: {graph_path}")
+        filter_symbol_graph(graph_path, set(config["allowedModules"]))
+        retain_symbol_graph_module(graph_directory, config["moduleName"])
+    return platforms
+
+
 def build_version(
     package_root,
     config,
@@ -852,87 +979,14 @@ def build_version(
     (staging / "site").mkdir()
     (staging / "catalog").mkdir()
     print(f"Building {version['name']} ({commit[:8]})")
+    platforms = []
     try:
         with PreparedSource(package_root, config, version, commit) as source_root:
             graph_root = staging / "symbols"
-            platforms = configured_symbol_graph_platforms(config)
-            graph_builds = (
-                [
-                    (
-                        platform,
-                        graph_root
-                        / f"{index:02d}-{platform_slug(platform['name'])}",
-                    )
-                    for index, platform in enumerate(platforms)
-                ]
-                if platforms
-                else [(None, graph_root)]
-            )
-            for platform, graph_directory in graph_builds:
-                graph_directory.mkdir(parents=True, exist_ok=True)
-                platform_arguments = []
-                log_suffix = ""
-                if platform is not None:
-                    print(f"Building {version['name']} [{platform['name']}]")
-                    log_suffix = f"-{platform_slug(platform['name'])}"
-                    platform_arguments.extend(["--triple", platform["triple"]])
-                    sdk = resolve_platform_sdk(platform)
-                    if sdk:
-                        platform_arguments.extend(["--sdk", sdk])
-                    swift_sdk = platform.get("swiftSDK")
-                    if swift_sdk:
-                        platform_arguments.extend(["--swift-sdk", swift_sdk])
-                    platform_arguments.extend(platform["buildArguments"])
-                build_command = [
-                    "swift",
-                    "build",
-                    # Command plugins already run inside SwiftPM's sandbox. A
-                    # nested swift build can't apply a second sandbox profile.
-                    "--disable-sandbox",
-                    "--package-path",
-                    str(source_root),
-                    "--target",
-                    config["targetName"],
-                    *config["buildArguments"],
-                    *platform_arguments,
-                    "-Xswiftc",
-                    "-emit-symbol-graph",
-                    "-Xswiftc",
-                    "-emit-symbol-graph-dir",
-                    "-Xswiftc",
-                    str(graph_directory),
-                    "-Xswiftc",
-                    "-symbol-graph-minimum-access-level",
-                    "-Xswiftc",
-                    config["symbolGraph"]["minimumAccessLevel"],
-                ]
-                if config["symbolGraph"].get("emitExtensionBlocks", False):
-                    build_command.extend(
-                        ["-Xswiftc", "-emit-extension-block-symbols"]
-                    )
-                if config["symbolGraph"].get("skipProtocolImplementations", True):
-                    # Force the symbol-graph option through SwiftPM's driver. Passing
-                    # it as a plain Swift driver option doesn't reach the frontend
-                    # emit-module job with current Apple Swift toolchains.
-                    build_command.extend(
-                        [
-                            "-Xswiftc",
-                            "-Xfrontend",
-                            "-Xswiftc",
-                            "-skip-protocol-implementations",
-                        ]
-                    )
-                run(
-                    build_command,
-                    environment=config["environment"],
-                    log_path=logs_root
-                    / f"{version['name']}{log_suffix}-swift-build.log",
+            if not config["documentationOnly"]:
+                platforms = build_symbol_graphs(
+                    source_root, config, version, graph_root, logs_root
                 )
-                graph_path = graph_directory / f"{config['moduleName']}.symbols.json"
-                if not graph_path.is_file():
-                    raise VersionedDocCError(f"missing symbol graph: {graph_path}")
-                filter_symbol_graph(graph_path, set(config["allowedModules"]))
-                retain_symbol_graph_module(graph_directory, config["moduleName"])
 
             source_catalog = source_root / config["catalogPath"]
             catalog_fallback_source_commit = None
@@ -965,18 +1019,24 @@ def build_version(
                 *docc_command,
                 "convert",
                 str(catalog),
-                "--additional-symbol-graph-dir",
-                str(graph_root),
-                "--transform-for-static-hosting",
-                "--output-path",
-                str(staging / "site"),
-                "--hosting-base-path",
-                f"{config['hostingBasePath']}/{version['name']}",
-                "--default-code-listing-language",
-                "swift",
-                "--experimental-enable-custom-templates",
-                *config["doccArguments"],
             ]
+            if not config["documentationOnly"]:
+                docc.extend(
+                    ["--additional-symbol-graph-dir", str(graph_root)]
+                )
+            docc.extend(
+                [
+                    "--transform-for-static-hosting",
+                    "--output-path",
+                    str(staging / "site"),
+                    "--hosting-base-path",
+                    f"{config['hostingBasePath']}/{version['name']}",
+                    "--default-code-listing-language",
+                    "swift",
+                    "--experimental-enable-custom-templates",
+                    *config["doccArguments"],
+                ]
+            )
             source_repository = config.get("sourceRepository")
             if source_repository:
                 source_ref = version.get("sourceRef", version["ref"])
@@ -1011,9 +1071,15 @@ def build_version(
         "sourceCommit": commit,
         "buildDate": build_date,
         "buildFingerprint": fingerprint,
-        "platforms": [platform["name"] for platform in platforms]
-        if platforms
-        else ["host"],
+        "platforms": (
+            []
+            if config["documentationOnly"]
+            else (
+                [platform["name"] for platform in platforms]
+                if platforms
+                else ["host"]
+            )
+        ),
     }
     if catalog_fallback_source_commit is not None:
         metadata["catalogFallbackSourceCommit"] = catalog_fallback_source_commit
@@ -1245,6 +1311,10 @@ def assemble(package_root, config, versions, cache_root, output_path, build_date
     write_legacy_routing_files(output_path, config)
     (output_path / ".nojekyll").touch()
 
+    if not changes_enabled(config):
+        print(f"Versioned documentation assembled at {output_path}")
+        return
+
     api_script = Path(__file__).with_name("api_changes.py")
     api_command = [
         sys.executable,
@@ -1265,16 +1335,24 @@ def assemble(package_root, config, versions, cache_root, output_path, build_date
         str(config["apiChanges"]["pageSize"]),
     ]
     for version in versions:
-        graph_paths = module_symbol_graph_paths(
-            cache_root / version["name"] / "symbols", config["moduleName"]
-        )
-        if not graph_paths:
-            raise VersionedDocCError(
-                f"missing symbol graphs for {version['name']} ({config['moduleName']})"
+        if not config["documentationOnly"]:
+            graph_paths = module_symbol_graph_paths(
+                cache_root / version["name"] / "symbols", config["moduleName"]
             )
-        for graph_path in graph_paths:
+            if not graph_paths:
+                raise VersionedDocCError(
+                    f"missing symbol graphs for {version['name']} ({config['moduleName']})"
+                )
+            for graph_path in graph_paths:
+                api_command.extend(
+                    ["--symbol-graph", f"{version['name']}={graph_path}"]
+                )
+        if config["articleChanges"]["enabled"]:
             api_command.extend(
-                ["--symbol-graph", f"{version['name']}={graph_path}"]
+                [
+                    "--article-root",
+                    f"{version['name']}={output_path / version['name'] / 'data' / 'documentation'}",
+                ]
             )
     run(api_command)
     print(f"Versioned documentation assembled at {output_path}")
@@ -1282,9 +1360,12 @@ def assemble(package_root, config, versions, cache_root, output_path, build_date
 
 def build_command(arguments):
     package_root = resolve_path(Path.cwd(), arguments.package_path)
-    if not (package_root / "Package.swift").is_file():
-        raise VersionedDocCError(f"not a Swift package: {package_root}")
     config, config_path = load_config(package_root, arguments.config)
+    if (
+        not config["documentationOnly"]
+        and not (package_root / "Package.swift").is_file()
+    ):
+        raise VersionedDocCError(f"not a Swift package: {package_root}")
     versions = configured_versions(package_root, config)
     output_path = resolve_path(package_root, arguments.output or config["outputPath"])
     cache_root = resolve_path(package_root, arguments.cache or config["cachePath"])
@@ -1318,7 +1399,7 @@ def build_command(arguments):
         commit = git(package_root, "rev-parse", f"{version['ref']}^{{commit}}")
         cache_entry = cache_root / version["name"]
         cache_hit = not arguments.rebuild and cache_valid(
-            cache_entry, commit, fingerprint, config["moduleName"]
+            cache_entry, commit, fingerprint, config.get("moduleName")
         )
         uses_remote = (
             oci_cache
@@ -1381,9 +1462,14 @@ def build_command(arguments):
                 cache_root,
             )
     assemble(package_root, config, versions, cache_root, output_path, build_date)
+    preview_suffix = (
+        "changes/"
+        if changes_enabled(config)
+        else f"documentation/{config['modulePath']}/"
+    )
     print(
         f"Preview: http://127.0.0.1:{arguments.preview_port}"
-        f"{config['hostingBasePath']}/{config['defaultVersion']}/changes/"
+        f"{config['hostingBasePath']}/{config['defaultVersion']}/{preview_suffix}"
     )
 
 

@@ -195,6 +195,23 @@ class VersionedDocCTests(unittest.TestCase):
             ],
         )
 
+    def test_explicit_versions_preserve_source_refs(self):
+        config = {
+            "defaultVersion": "main",
+            "versions": [
+                {"name": "main", "ref": "HEAD", "sourceRef": "main"},
+                {
+                    "name": "6.3",
+                    "ref": "swift-6.3-fcs",
+                    "sourceRef": "swift-6.3-fcs",
+                },
+            ],
+        }
+
+        versions = versioned_docc.configured_versions(Path("/unused"), config)
+
+        self.assertEqual(versions, config["versions"])
+
     def test_semantic_versions_selects_latest_patch_from_each_release_series(self):
         tags = "\n".join(
             ["0.1.0", "0.2.0", "0.1.1", "0.2.1", "not-a-version"]
@@ -327,6 +344,61 @@ class VersionedDocCTests(unittest.TestCase):
         self.assertIn("window.location.search + window.location.hash", fallback)
         self.assertIn("window.location.replace(target)", fallback)
         self.assertIn("data-versioned-docc-pages-fallback", fallback)
+
+    def test_documentation_only_header_omits_api_changes(self):
+        template = (RESOURCE_ROOT / "header.html").read_text(encoding="utf-8")
+        config = {
+            "documentationOnly": True,
+            "hostingBasePath": "/swift-book",
+            "defaultVersion": "main",
+            "modulePath": "the-swift-programming-language",
+            "projectName": "swift-book",
+        }
+
+        header = versioned_docc.render_header(
+            template, config, "6.3", "2026-08-06"
+        )
+
+        self.assertNotIn("API Changes", header)
+        self.assertNotIn("__VERSIONED_DOCC_CHANGES_LINK__", header)
+        self.assertIn(
+            "/swift-book/6.3/documentation/the-swift-programming-language/",
+            header,
+        )
+
+    def test_documentation_only_header_links_opted_in_article_changes(self):
+        template = (RESOURCE_ROOT / "header.html").read_text(encoding="utf-8")
+        config = {
+            "documentationOnly": True,
+            "articleChanges": {"enabled": True},
+            "hostingBasePath": "/swift-book",
+            "defaultVersion": "main",
+            "modulePath": "the-swift-programming-language",
+            "projectName": "swift-book",
+        }
+
+        header = versioned_docc.render_header(
+            template, config, "6.3", "2026-08-06"
+        )
+
+        self.assertIn('href="/swift-book/main/changes/">Changes</a>', header)
+        self.assertNotIn("API Changes", header)
+
+    def test_symbol_documentation_header_links_api_changes(self):
+        template = (RESOURCE_ROOT / "header.html").read_text(encoding="utf-8")
+        config = {
+            "documentationOnly": False,
+            "hostingBasePath": "/DemoKit",
+            "defaultVersion": "main",
+            "modulePath": "demokit",
+            "projectName": "DemoKit",
+        }
+
+        header = versioned_docc.render_header(
+            template, config, "main", "2026-08-06"
+        )
+
+        self.assertIn('href="/DemoKit/main/changes/">API Changes</a>', header)
 
     def test_legacy_routing_files_cover_project_and_deploy_roots(self):
         config = {
@@ -609,6 +681,111 @@ class VersionedDocCTests(unittest.TestCase):
         self.assertIn("window.addEventListener('pageshow',restoreAndRender)", dashboard)
         self.assertIn("window.addEventListener('popstate',restoreAndRender)", dashboard)
 
+    def test_article_changes_compare_rendered_content_without_reference_noise(self):
+        identifier = "doc://org.example/documentation/Guide/Overview"
+        document = {
+            "kind": "article",
+            "identifier": {"url": identifier},
+            "metadata": {"title": "Overview", "role": "article"},
+            "abstract": [{"type": "text", "text": "A guide."}],
+            "primaryContentSections": [
+                {
+                    "kind": "content",
+                    "content": [
+                        {
+                            "type": "paragraph",
+                            "inlineContent": [{"type": "text", "text": "Before"}],
+                        }
+                    ],
+                }
+            ],
+            "references": {identifier: {"url": "/documentation/old-route"}},
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            documentation_root = Path(directory) / "data" / "documentation"
+            article_path = documentation_root / "guide" / "overview.json"
+            article_path.parent.mkdir(parents=True)
+            article_path.write_text(json.dumps(document), encoding="utf-8")
+            previous = api_changes.article_snapshot(documentation_root)
+
+            document["references"][identifier]["url"] = "/documentation/new-route"
+            article_path.write_text(json.dumps(document), encoding="utf-8")
+            reference_only = api_changes.article_snapshot(documentation_root)
+            self.assertEqual(
+                previous[identifier]["_digest"], reference_only[identifier]["_digest"]
+            )
+
+            document["primaryContentSections"][0]["content"][0]["inlineContent"][0][
+                "text"
+            ] = "After"
+            article_path.write_text(json.dumps(document), encoding="utf-8")
+            current = api_changes.article_snapshot(documentation_root)
+
+        comparison = api_changes.compare_articles("1.0", "main", previous, current)
+        self.assertEqual(
+            comparison["counts"], {"added": 0, "modified": 1, "removed": 0}
+        )
+        change = comparison["changes"][0]
+        self.assertEqual(change["source"], "article")
+        self.assertIn("content", change["fields"])
+        self.assertTrue(any(line == "-Before" for line in change["diff"]))
+        self.assertTrue(any(line == "+After" for line in change["diff"]))
+        self.assertEqual(
+            change["current"]["path"], "/documentation/guide/overview"
+        )
+
+    def test_article_changes_dashboard_uses_generic_changes_title_and_filter(self):
+        arguments = mock.Mock(
+            hosting_base_path="/Guide",
+            default_version="main",
+            module_path="guide",
+            project_name="Guide",
+            build_date="2026-08-06",
+            page_size=10,
+        )
+        comparison = {
+            "id": "1.0-to-main",
+            "previousVersion": "1.0",
+            "currentVersion": "main",
+            "counts": {"added": 0, "modified": 0, "removed": 0},
+            "changes": [],
+        }
+
+        dashboard = api_changes.render_dashboard(
+            [comparison], arguments, ["article"]
+        )
+
+        self.assertIn("<title>Changes | Guide Documentation</title>", dashboard)
+        self.assertIn('id="source"', dashboard)
+        self.assertIn("parameters.get('content')", dashboard)
+        self.assertIn("articleDiff(change)", dashboard)
+
+    def test_legacy_api_manifest_comparison_excludes_articles_and_source_field(self):
+        comparison = {
+            "id": "1.0-to-main",
+            "previousVersion": "1.0",
+            "currentVersion": "main",
+            "counts": {"added": 2, "modified": 0, "removed": 0},
+            "changes": [
+                {
+                    "type": "added",
+                    "source": "api",
+                    "current": {"displayId": "DemoAPI"},
+                },
+                {
+                    "type": "added",
+                    "source": "article",
+                    "current": {"displayId": "/documentation/guide"},
+                },
+            ],
+        }
+
+        legacy = api_changes.legacy_api_comparison(comparison)
+
+        self.assertEqual(legacy["counts"], {"added": 1, "modified": 0, "removed": 0})
+        self.assertEqual(len(legacy["changes"]), 1)
+        self.assertNotIn("source", legacy["changes"][0])
+
     def test_api_changes_page_size_defaults_and_accepts_business_configuration(self):
         config = {
             "schemaVersion": 1,
@@ -628,11 +805,66 @@ class VersionedDocCTests(unittest.TestCase):
             path.write_text(json.dumps(config), encoding="utf-8")
             loaded, _ = versioned_docc.load_config(root, path)
             self.assertEqual(loaded["apiChanges"]["pageSize"], 10)
+            self.assertFalse(loaded["articleChanges"]["enabled"])
 
             config["apiChanges"] = {"pageSize": 25}
             path.write_text(json.dumps(config), encoding="utf-8")
             loaded, _ = versioned_docc.load_config(root, path)
             self.assertEqual(loaded["apiChanges"]["pageSize"], 25)
+
+            config["articleChanges"] = {"enabled": True}
+            path.write_text(json.dumps(config), encoding="utf-8")
+            loaded, _ = versioned_docc.load_config(root, path)
+            self.assertTrue(loaded["articleChanges"]["enabled"])
+
+    def test_documentation_only_configuration_does_not_require_swift_target(self):
+        config = {
+            "schemaVersion": 1,
+            "documentationOnly": True,
+            "projectName": "swift-book",
+            "modulePath": "the-swift-programming-language",
+            "catalogPath": "TSPL.docc",
+            "hostingBasePath": "/swift-book",
+            "versions": [
+                {"name": "main", "ref": "HEAD"},
+                {"name": "6.3", "ref": "swift-6.3-fcs"},
+            ],
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = root / ".vdc.json"
+            path.write_text(json.dumps(config), encoding="utf-8")
+
+            loaded, _ = versioned_docc.load_config(root, path)
+
+        self.assertTrue(loaded["documentationOnly"])
+        self.assertNotIn("moduleName", loaded)
+        self.assertNotIn("targetName", loaded)
+        self.assertEqual(
+            loaded["allowedModules"], ["the-swift-programming-language"]
+        )
+
+    def test_symbol_documentation_configuration_requires_swift_target(self):
+        config = {
+            "schemaVersion": 1,
+            "projectName": "DemoKit",
+            "catalogPath": "DemoKit.docc",
+            "hostingBasePath": "/DemoKit",
+            "versions": [
+                {"name": "main", "ref": "HEAD"},
+                {"name": "0.1.0", "ref": "0.1.0"},
+            ],
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = root / ".vdc.json"
+            path.write_text(json.dumps(config), encoding="utf-8")
+
+            with self.assertRaisesRegex(
+                versioned_docc.VersionedDocCError,
+                "moduleName, targetName",
+            ):
+                versioned_docc.load_config(root, path)
 
     def test_symbol_graph_platform_configuration_orders_default_first(self):
         config = {
@@ -817,6 +1049,27 @@ class VersionedDocCTests(unittest.TestCase):
                 versioned_docc.cache_valid(
                     cache, "commit", "fingerprint", "DemoKit"
                 )
+            )
+
+    def test_documentation_only_cache_does_not_require_symbol_graphs(self):
+        with tempfile.TemporaryDirectory() as directory:
+            cache = Path(directory)
+            (cache / "site").mkdir()
+            (cache / "site" / "index.html").write_text(
+                "fixture\n", encoding="utf-8"
+            )
+            (cache / "metadata.json").write_text(
+                json.dumps(
+                    {
+                        "sourceCommit": "commit",
+                        "buildFingerprint": "fingerprint",
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            self.assertTrue(
+                versioned_docc.cache_valid(cache, "commit", "fingerprint")
             )
 
     def test_prune_site_to_module_removes_dependency_documentation_and_indexes(self):

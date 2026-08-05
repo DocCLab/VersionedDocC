@@ -1,18 +1,21 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://raw.githubusercontent.com/DocCLab/VersionedDocC/0.0.10/Schema/VersionedDocC.schema.json",
+  "$id": "https://raw.githubusercontent.com/DocCLab/VersionedDocC/0.0.11/Schema/VersionedDocC.schema.json",
   "title": "VersionedDocC configuration",
   "type": "object",
   "required": [
     "schemaVersion",
     "projectName",
-    "moduleName",
-    "targetName",
     "catalogPath",
     "hostingBasePath"
   ],
   "properties": {
     "schemaVersion": { "const": 1 },
+    "documentationOnly": {
+      "type": "boolean",
+      "default": false,
+      "description": "Build a standalone DocC catalog without SwiftPM or symbol graphs."
+    },
     "projectName": { "type": "string", "minLength": 1 },
     "moduleName": { "type": "string", "minLength": 1 },
     "modulePath": { "type": "string", "minLength": 1 },
@@ -115,15 +118,35 @@
       },
       "additionalProperties": false
     },
+    "articleChanges": {
+      "type": "object",
+      "description": "Opt in to adjacent-version changes for authored DocC articles.",
+      "properties": {
+        "enabled": { "type": "boolean", "default": false }
+      },
+      "additionalProperties": false
+    },
     "allowedModules": { "type": "array", "items": { "type": "string" } },
     "environment": { "type": "object", "additionalProperties": { "type": ["string", "number", "boolean"] } },
     "localDependencies": { "type": "object", "additionalProperties": { "type": "string" } },
     "buildArguments": { "type": "array", "items": { "type": "string" } },
     "doccArguments": { "type": "array", "items": { "type": "string" } }
   },
-  "oneOf": [
-    { "required": ["versions"] },
-    { "required": ["releasePolicy"] }
+  "allOf": [
+    {
+      "if": {
+        "required": ["documentationOnly"],
+        "properties": { "documentationOnly": { "const": true } }
+      },
+      "then": { "required": ["modulePath"] },
+      "else": { "required": ["moduleName", "targetName"] }
+    },
+    {
+      "oneOf": [
+        { "required": ["versions"] },
+        { "required": ["releasePolicy"] }
+      ]
+    }
   ],
   "additionalProperties": false
 }

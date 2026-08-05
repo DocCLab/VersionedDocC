@@ -1,9 +1,10 @@
 # VersionedDocC
 
 VersionedDocC builds Swift-DocC documentation for a development branch and
-published releases, stores each version as an immutable artifact, assembles a
-version-aware static website, and generates public API comparisons from Swift
-symbol graphs.
+published releases, stores each version as an immutable artifact, and assembles
+a version-aware static website. Swift packages also get public API comparisons
+from their symbol graphs; standalone DocC catalogs can be published without a
+`Package.swift` file.
 
 VersionedDocC is an orchestration layer around the Swift toolchain's `swift`
 and `docc` executables. It does not fork Swift-DocC or Swift-DocC Render.
@@ -13,6 +14,7 @@ and `docc` executables. It does not fork Swift-DocC or Swift-DocC Render.
 - Stable `/<project>/<version>/documentation/...` URLs.
 - A custom DocC header with version selection and UTC build date.
 - Adjacent-version API Changes generated from real public symbol graphs.
+- Optional adjacent-version article changes generated from stable DocC render content.
 - `-skip-protocol-implementations` to avoid inherited protocol-extension
   members being repeated for every conforming type.
 - Immutable per-version caches with source, toolchain, renderer, and build
@@ -24,6 +26,8 @@ and `docc` executables. It does not fork Swift-DocC or Swift-DocC Render.
   fallback from legacy documentation URLs to the configured default version.
 - A SwiftPM command plugin, standalone executable, composite GitHub Action,
   and reusable Pages workflow.
+- Native documentation-only mode for repositories that contain a standalone
+  `.docc` catalog but no Swift package or symbol graphs.
 
 ## Examples
 
@@ -55,7 +59,7 @@ Add `.vdc.json` to the package root:
 
 ```json
 {
-  "$schema": "https://raw.githubusercontent.com/DocCLab/VersionedDocC/0.0.10/Schema/VersionedDocC.schema.json",
+  "$schema": "https://raw.githubusercontent.com/DocCLab/VersionedDocC/0.0.11/Schema/VersionedDocC.schema.json",
   "schemaVersion": 1,
   "projectName": "ExampleKit",
   "moduleName": "ExampleKit",
@@ -95,6 +99,46 @@ Add `.vdc.json` to the package root:
   }
 }
 ```
+
+For a repository that contains only a standalone DocC catalog, set
+`documentationOnly` and provide the catalog's stable documentation route with
+`modulePath`. `moduleName`, `targetName`, symbol graph settings, and API Changes
+aren't used:
+
+```json
+{
+  "$schema": "https://raw.githubusercontent.com/DocCLab/VersionedDocC/0.0.11/Schema/VersionedDocC.schema.json",
+  "schemaVersion": 1,
+  "documentationOnly": true,
+  "projectName": "swift-book",
+  "modulePath": "the-swift-programming-language",
+  "catalogPath": "TSPL.docc",
+  "hostingBasePath": "/swift-book",
+  "defaultVersion": "main",
+  "articleChanges": {
+    "enabled": true
+  },
+  "versions": [
+    { "name": "main", "ref": "HEAD", "sourceRef": "main" },
+    { "name": "6.3", "ref": "swift-6.3-fcs" },
+    { "name": "6.2.3", "ref": "swift-6.2.3-fcs" }
+  ],
+  "sourceRepository": "https://github.com/swiftlang/swift-book"
+}
+```
+
+Documentation-only caches contain the converted DocC site and metadata but no
+symbol graphs. Article changes are disabled by default, so their header normally
+omits the Changes link and assembly skips comparison generation. Set
+`articleChanges.enabled` to `true` to compare authored articles between adjacent
+versions. The generated Changes page lists added, modified, and removed articles
+and includes a bounded unified content diff for modifications.
+
+Article comparison fingerprints only each article's title, role, abstract,
+rendered content, and topic sections. It excludes DocC references and
+source-service metadata so a changed source URL or linked-page metadata doesn't
+mark unrelated articles as modified. Enabling article changes also works for
+normal Swift packages, where article and public API changes share one dashboard.
 
 The CLI, SwiftPM plugin, composite action, and reusable workflow discover this
 file automatically. Use `--config` or the `config` action input only for a
@@ -194,7 +238,7 @@ Add VersionedDocC as a direct package dependency:
 ```swift
 .package(
     url: "https://github.com/DocCLab/VersionedDocC.git",
-    exact: "0.0.10"
+    exact: "0.0.11"
 )
 ```
 
@@ -285,7 +329,7 @@ history:
     fetch-depth: 0
 - uses: oras-project/setup-oras@v1
 - run: echo "${{ github.token }}" | oras login ghcr.io --username "${{ github.actor }}" --password-stdin
-- uses: DocCLab/VersionedDocC@0.0.10
+- uses: DocCLab/VersionedDocC@0.0.11
   with:
     config: .vdc.json
     publish-oci-cache: true
@@ -296,7 +340,7 @@ OpenSwiftUIProject repositories can alternatively use the reusable workflow:
 ```yaml
 jobs:
   documentation:
-    uses: DocCLab/VersionedDocC/.github/workflows/pages.yml@0.0.10
+    uses: DocCLab/VersionedDocC/.github/workflows/pages.yml@0.0.11
     with:
       config: .vdc.json
       artifact-path: .docs/build/versioned-site
@@ -335,7 +379,9 @@ cache remains the fast first-level cache for `main` and recent runs.
 
 ## Requirements
 
-- Swift 6.0 or newer.
+- Swift 6.0 or newer to build the VersionedDocC executable and Swift package
+  symbol graphs. Documentation-only repositories don't need their own Swift
+  package.
 - Python 3.
 - Git and a Swift-DocC toolchain.
 - ORAS 1.2 or newer when `ociCache` is enabled.

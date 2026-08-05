@@ -1,6 +1,6 @@
 ---
 name: adopt-versioned-docc
-description: Add VersionedDocC to an existing Swift package, including .vdc.json configuration, multi-version and multi-platform symbol graphs, GitHub Actions, GitHub Pages, API comparisons, legacy URL compatibility, and optional GHCR OCI caching. Use when a user asks to adopt, configure, migrate to, debug, or validate VersionedDocC documentation publishing.
+description: Add VersionedDocC to a Swift package or standalone DocC catalog, including .vdc.json configuration, multi-version and multi-platform symbol graphs, GitHub Actions, GitHub Pages, API comparisons, legacy URL compatibility, and optional GHCR OCI caching. Use when a user asks to adopt, configure, migrate to, debug, or validate VersionedDocC documentation publishing.
 ---
 
 # Adopt VersionedDocC
@@ -14,6 +14,7 @@ Before editing, inspect:
 
 - `Package.swift`, `Package.resolved`, public targets, and platform declarations.
 - Existing `.docc` catalogs and documentation workflows.
+- Whether the repository is a Swift package or a standalone DocC catalog.
 - Semantic-version tags and the development branch name.
 - Public extensions on types from other modules.
 - The current Git status; preserve unrelated user changes.
@@ -36,6 +37,14 @@ Set these fields from the package rather than guessing:
 - `hostingBasePath`: GitHub Pages project path, normally `/<repository>`.
 - `sourceRepository`: canonical HTTPS GitHub repository URL.
 - `defaultVersion`: normally `main`.
+
+For a standalone DocC catalog with no `Package.swift`, set
+`documentationOnly` to `true`, require an explicit `modulePath` matching the
+catalog's generated documentation route, and omit `moduleName`, `targetName`,
+and symbol graph configuration. Article changes are disabled by default; set
+`articleChanges.enabled` to `true` only when the repository wants authored DocC
+articles included in its Changes dashboard. Use explicit `versions` when the
+upstream tags aren't semantic versions.
 
 Prefer `releasePolicy` for normal packages. `latest: 2` publishes the newest
 patch from each of the two newest distinct `major.minor` release lines; it does
@@ -90,7 +99,8 @@ Run the narrowest useful checks first:
 2. Confirm the selected tags represent distinct `major.minor` release lines.
 3. Build locally without OCI publishing, then run it again and confirm cache
    hits for every unchanged version.
-4. Inspect `<site-root>/versions.json` and the `main/changes/` comparisons.
+4. Inspect `<site-root>/versions.json` and, for Swift packages, the
+   `main/changes/` comparisons.
 5. Preview with VersionedDocC so legacy URL redirects are exercised.
 6. After CI, verify the Pages URL and confirm missing historical OCI caches were
    built once and published.

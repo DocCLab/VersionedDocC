@@ -6,7 +6,7 @@ inputs:
     required: false
     default: .vdc.json
   package-path:
-    description: Swift package root
+    description: Swift package or documentation repository root
     required: false
     default: .
   output:
