@@ -59,7 +59,7 @@ Add `.vdc.json` to the package root:
 
 ```json
 {
-  "$schema": "https://raw.githubusercontent.com/DocCLab/VersionedDocC/0.0.12/Schema/VersionedDocC.schema.json",
+  "$schema": "https://raw.githubusercontent.com/DocCLab/VersionedDocC/0.0.13/Schema/VersionedDocC.schema.json",
   "schemaVersion": 1,
   "projectName": "ExampleKit",
   "moduleName": "ExampleKit",
@@ -107,7 +107,7 @@ aren't used:
 
 ```json
 {
-  "$schema": "https://raw.githubusercontent.com/DocCLab/VersionedDocC/0.0.12/Schema/VersionedDocC.schema.json",
+  "$schema": "https://raw.githubusercontent.com/DocCLab/VersionedDocC/0.0.13/Schema/VersionedDocC.schema.json",
   "schemaVersion": 1,
   "documentationOnly": true,
   "projectName": "swift-book",
@@ -224,6 +224,18 @@ after its cache is published; later current-catalog edits rebuild development
 documentation only. If every local and OCI copy is deleted, rebuilding the old
 tag uses the then-current catalog again.
 
+If a release contains the catalog at a different location, set `catalogPath`
+on that entry in `versions`. This takes precedence over the top-level path for
+that version:
+
+```json
+{
+  "name": "5.7",
+  "ref": "swift-5.7-fcs",
+  "catalogPath": "Sources/TSPL/TSPL.docc"
+}
+```
+
 API Changes includes both the module's primary symbol graph and extension
 graphs such as `Module@UIKit.symbols.json`. Add externally extended module names
 to `allowedModules` when their generated documentation routes must remain in the
@@ -238,7 +250,7 @@ Add VersionedDocC as a direct package dependency:
 ```swift
 .package(
     url: "https://github.com/DocCLab/VersionedDocC.git",
-    exact: "0.0.12"
+    exact: "0.0.13"
 )
 ```
 
@@ -329,7 +341,7 @@ history:
     fetch-depth: 0
 - uses: oras-project/setup-oras@v1
 - run: echo "${{ github.token }}" | oras login ghcr.io --username "${{ github.actor }}" --password-stdin
-- uses: DocCLab/VersionedDocC@0.0.12
+- uses: DocCLab/VersionedDocC@0.0.13
   with:
     config: .vdc.json
     publish-oci-cache: true
@@ -340,7 +352,7 @@ OpenSwiftUIProject repositories can alternatively use the reusable workflow:
 ```yaml
 jobs:
   documentation:
-    uses: DocCLab/VersionedDocC/.github/workflows/pages.yml@0.0.12
+    uses: DocCLab/VersionedDocC/.github/workflows/pages.yml@0.0.13
     with:
       config: .vdc.json
       artifact-path: .docs/build/versioned-site

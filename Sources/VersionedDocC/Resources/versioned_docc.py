@@ -18,7 +18,7 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 
-VERSION = "0.0.12"
+VERSION = "0.0.13"
 DEFAULT_CONFIG = ".vdc.json"
 # Keep this stable across releases that only change assembly, routing, or the
 # command interface. Bump it only when the per-version DocC cache contents must
@@ -413,6 +413,13 @@ def configured_versions(repository, config):
                     f"sourceRef for {name} must be a non-empty string"
                 )
             normalized_version["sourceRef"] = source_ref
+        catalog_path = item.get("catalogPath")
+        if catalog_path is not None:
+            if not isinstance(catalog_path, str) or not catalog_path:
+                raise VersionedDocCError(
+                    f"catalogPath for {name} must be a non-empty string"
+                )
+            normalized_version["catalogPath"] = catalog_path
         normalized.append(normalized_version)
     if config["defaultVersion"] not in names:
         raise VersionedDocCError(
@@ -659,6 +666,7 @@ def version_cache_fingerprint(build_fingerprint, config, version):
     payload = {
         "buildFingerprint": build_fingerprint,
         "sourceRouting": source_routing,
+        "catalogPath": version.get("catalogPath", config.get("catalogPath")),
     }
     return sha256_bytes(json.dumps(payload, sort_keys=True).encode())
 
@@ -1024,7 +1032,10 @@ def build_version(
                     source_root, config, version, graph_root, logs_root
                 )
 
-            source_catalog = source_root / config["catalogPath"]
+            configured_catalog_path = version.get(
+                "catalogPath", config["catalogPath"]
+            )
+            source_catalog = source_root / configured_catalog_path
             catalog_fallback_source_commit = None
             if not source_catalog.is_dir():
                 fallback_catalog = package_root / config["catalogPath"]
@@ -1091,6 +1102,7 @@ def build_version(
         "version": version["name"],
         "ref": version["ref"],
         "sourceCommit": commit,
+        "catalogPath": configured_catalog_path,
         "buildDate": build_date,
         "buildFingerprint": fingerprint,
         "platforms": (

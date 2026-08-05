@@ -309,12 +309,17 @@ class VersionedDocCTests(unittest.TestCase):
             ],
         )
 
-    def test_configured_versions_preserves_explicit_source_refs(self):
+    def test_configured_versions_preserves_version_overrides(self):
         config = {
             "defaultVersion": "main",
             "versions": [
                 {"name": "main", "ref": "HEAD", "sourceRef": "trunk"},
-                {"name": "0.1.0", "ref": "release-commit", "sourceRef": "0.1.0"},
+                {
+                    "name": "0.1.0",
+                    "ref": "release-commit",
+                    "sourceRef": "0.1.0",
+                    "catalogPath": "Documentation/DemoKit.docc",
+                },
             ],
         }
 
@@ -381,6 +386,17 @@ class VersionedDocCTests(unittest.TestCase):
             baseline,
             versioned_docc.version_cache_fingerprint(
                 "build", config, changed_explicit_ref
+            ),
+        )
+
+        changed_catalog_path = {
+            **version,
+            "catalogPath": "Documentation/DemoKit.docc",
+        }
+        self.assertNotEqual(
+            baseline,
+            versioned_docc.version_cache_fingerprint(
+                "build", config, changed_catalog_path
             ),
         )
 

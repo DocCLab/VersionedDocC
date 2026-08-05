@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://raw.githubusercontent.com/DocCLab/VersionedDocC/0.0.12/Schema/VersionedDocC.schema.json",
+  "$id": "https://raw.githubusercontent.com/DocCLab/VersionedDocC/0.0.13/Schema/VersionedDocC.schema.json",
   "title": "VersionedDocC configuration",
   "type": "object",
   "required": [
@@ -37,7 +37,8 @@
         "properties": {
           "name": { "type": "string" },
           "ref": { "type": "string" },
-          "sourceRef": { "type": "string" }
+          "sourceRef": { "type": "string" },
+          "catalogPath": { "type": "string", "minLength": 1 }
         },
         "additionalProperties": false
       }
