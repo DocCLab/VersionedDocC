@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://raw.githubusercontent.com/DocCLab/VersionedDocC/0.0.11/Schema/VersionedDocC.schema.json",
+  "$id": "https://raw.githubusercontent.com/DocCLab/VersionedDocC/0.0.12/Schema/VersionedDocC.schema.json",
   "title": "VersionedDocC configuration",
   "type": "object",
   "required": [
