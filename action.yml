@@ -1,5 +1,8 @@
 name: VersionedDocC
 description: Build and assemble cached, versioned Swift-DocC documentation
+branding:
+  icon: book-open
+  color: blue
 inputs:
   config:
     description: Configuration path relative to package-path
