@@ -23,7 +23,7 @@ DEFAULT_CONFIG = ".vdc.json"
 # Keep this stable across releases that only change assembly, routing, or the
 # command interface. Bump it only when the per-version DocC cache contents must
 # be regenerated. Its initial value preserves 0.0.1 cache fingerprints.
-BUILD_CACHE_REVISION = "0.0.1"
+BUILD_CACHE_REVISION = "0.0.2"
 SEMVER = re.compile(r"^v?(\d+)\.(\d+)\.(\d+)(?:[-+].*)?$")
 LATEST_RELEASE_STRATEGIES = {"majorMinor", "semanticVersion", "tagDate"}
 OPTIONS_TOKEN = "__VERSIONED_DOCC_VERSION_OPTIONS__"
@@ -356,6 +356,13 @@ def semantic_version_series(tag):
     return tuple(map(int, match.groups()[:2]))
 
 
+def source_reference(config, version):
+    reference = version.get("sourceRef", version["ref"])
+    if reference == "HEAD":
+        return config.get("developmentSourceRef", "main")
+    return reference
+
+
 def configured_versions(repository, config):
     if config.get("versions"):
         versions = config["versions"]
@@ -595,6 +602,20 @@ def render_header(template, config, version, build_date):
     return template
 
 
+def source_service_arguments(config, version, source_root):
+    source_repository = config.get("sourceRepository")
+    if not source_repository:
+        return []
+    return [
+        "--source-service",
+        "github",
+        "--source-service-base-url",
+        f"{source_repository.rstrip('/')}/blob/{source_reference(config, version)}",
+        "--checkout-path",
+        str(source_root.resolve()),
+    ]
+
+
 def build_fingerprint(config, docc_binary, header_template):
     renderer_path = os.environ.get("DOCC_HTML_DIR")
     if renderer_path:
@@ -624,6 +645,21 @@ def build_fingerprint(config, docc_binary, header_template):
     }
     if article_changes_enabled(config):
         payload["articleChanges"] = True
+    return sha256_bytes(json.dumps(payload, sort_keys=True).encode())
+
+
+def version_cache_fingerprint(build_fingerprint, config, version):
+    source_repository = config.get("sourceRepository")
+    source_routing = None
+    if source_repository:
+        source_routing = {
+            "repository": source_repository.rstrip("/"),
+            "ref": source_reference(config, version),
+        }
+    payload = {
+        "buildFingerprint": build_fingerprint,
+        "sourceRouting": source_routing,
+    }
     return sha256_bytes(json.dumps(payload, sort_keys=True).encode())
 
 
@@ -1037,21 +1073,7 @@ def build_version(
                     *config["doccArguments"],
                 ]
             )
-            source_repository = config.get("sourceRepository")
-            if source_repository:
-                source_ref = version.get("sourceRef", version["ref"])
-                if source_ref == "HEAD":
-                    source_ref = config.get("developmentSourceRef", "main")
-                docc.extend(
-                    [
-                        "--source-service",
-                        "github",
-                        "--source-service-base-url",
-                        f"{source_repository.rstrip('/')}/blob/{source_ref}",
-                        "--checkout-path",
-                        str(source_root),
-                    ]
-                )
+            docc.extend(source_service_arguments(config, version, source_root))
             run(docc, log_path=logs_root / f"{version['name']}-docc.log")
             if not (staging / "site" / "index.html").is_file():
                 raise VersionedDocCError(f"DocC emitted no index for {version['name']}")
@@ -1083,6 +1105,9 @@ def build_version(
     }
     if catalog_fallback_source_commit is not None:
         metadata["catalogFallbackSourceCommit"] = catalog_fallback_source_commit
+    if config.get("sourceRepository"):
+        metadata["sourceRepository"] = config["sourceRepository"].rstrip("/")
+        metadata["sourceRef"] = source_reference(config, version)
     (staging / "metadata.json").write_text(
         json.dumps(metadata, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )
@@ -1380,7 +1405,7 @@ def build_command(arguments):
         raise VersionedDocCError("build date must use YYYY-MM-DD")
     header_template = Path(__file__).with_name("header.html").read_text(encoding="utf-8")
     docc_command, docc_binary = find_docc()
-    fingerprint = build_fingerprint(config, docc_binary, header_template)
+    base_fingerprint = build_fingerprint(config, docc_binary, header_template)
     oci_cache = config.get("ociCache")
     if arguments.publish_oci_cache and not oci_cache:
         raise VersionedDocCError("--publish-oci-cache requires ociCache configuration")
@@ -1396,6 +1421,9 @@ def build_command(arguments):
     if oci_cache:
         print(f"  OCI cache: {oci_cache['repository']}")
     for version in versions:
+        fingerprint = version_cache_fingerprint(
+            base_fingerprint, config, version
+        )
         commit = git(package_root, "rev-parse", f"{version['ref']}^{{commit}}")
         cache_entry = cache_root / version["name"]
         cache_hit = not arguments.rebuild and cache_valid(

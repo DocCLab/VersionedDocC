@@ -309,6 +309,81 @@ class VersionedDocCTests(unittest.TestCase):
             ],
         )
 
+    def test_configured_versions_preserves_explicit_source_refs(self):
+        config = {
+            "defaultVersion": "main",
+            "versions": [
+                {"name": "main", "ref": "HEAD", "sourceRef": "trunk"},
+                {"name": "0.1.0", "ref": "release-commit", "sourceRef": "0.1.0"},
+            ],
+        }
+
+        versions = versioned_docc.configured_versions(Path("/unused"), config)
+
+        self.assertEqual(versions, config["versions"])
+
+    def test_source_service_uses_canonical_checkout_path(self):
+        config = {"sourceRepository": "https://github.com/Example/DemoKit/"}
+        version = {"name": "0.1.0", "ref": "0.1.0"}
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            checkout = root / "checkout"
+            checkout.mkdir()
+            checkout_alias = root / "checkout-alias"
+            checkout_alias.symlink_to(checkout, target_is_directory=True)
+
+            arguments = versioned_docc.source_service_arguments(
+                config, version, checkout_alias
+            )
+
+        self.assertEqual(
+            arguments,
+            [
+                "--source-service",
+                "github",
+                "--source-service-base-url",
+                "https://github.com/Example/DemoKit/blob/0.1.0",
+                "--checkout-path",
+                str(checkout.resolve()),
+            ],
+        )
+
+    def test_version_cache_fingerprint_includes_source_routing(self):
+        config = {
+            "sourceRepository": "https://github.com/Example/DemoKit",
+            "developmentSourceRef": "main",
+        }
+        version = {"name": "main", "ref": "HEAD"}
+        baseline = versioned_docc.version_cache_fingerprint(
+            "build", config, version
+        )
+
+        changed_repository = {
+            **config,
+            "sourceRepository": "https://github.com/Example/RenamedDemoKit",
+        }
+        changed_development_ref = {**config, "developmentSourceRef": "trunk"}
+        changed_explicit_ref = {**version, "sourceRef": "preview"}
+
+        self.assertNotEqual(
+            baseline,
+            versioned_docc.version_cache_fingerprint(
+                "build", changed_repository, version
+            ),
+        )
+        self.assertNotEqual(
+            baseline,
+            versioned_docc.version_cache_fingerprint(
+                "build", changed_development_ref, version
+            ),
+        )
+        self.assertNotEqual(
+            baseline,
+            versioned_docc.version_cache_fingerprint(
+                "build", config, changed_explicit_ref
+            ),
+        )
+
     def test_tool_release_does_not_invalidate_build_cache(self):
         config = {
             "targetName": "DemoKit",
