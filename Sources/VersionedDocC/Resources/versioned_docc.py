@@ -25,6 +25,7 @@ DEFAULT_CONFIG = ".vdc.json"
 # be regenerated. Its initial value preserves 0.0.1 cache fingerprints.
 BUILD_CACHE_REVISION = "0.0.1"
 SEMVER = re.compile(r"^v?(\d+)\.(\d+)\.(\d+)(?:[-+].*)?$")
+LATEST_RELEASE_STRATEGIES = {"majorMinor", "semanticVersion", "tagDate"}
 OPTIONS_TOKEN = "__VERSIONED_DOCC_VERSION_OPTIONS__"
 OCI_ARTIFACT_TYPE = "application/vnd.openswiftuiproject.versioned-docc.cache.v1"
 OCI_CONFIG_TYPE = "application/vnd.openswiftuiproject.versioned-docc.cache.config.v1+json"
@@ -273,28 +274,63 @@ def module_symbol_graph_paths(symbols_root, module_name):
     return sorted(paths)
 
 
-def semantic_versions(repository, count):
-    tags = git(repository, "tag", "--list").splitlines()
+def parsed_release_tag(tag, timestamp=0):
+    match = SEMVER.fullmatch(tag)
+    if not match:
+        return None
+    version = tuple(map(int, match.groups()))
+    normalized_tag = tag.removeprefix("v")
+    tag_without_build_metadata = normalized_tag.split("+", 1)[0]
+    is_stable = "-" not in tag_without_build_metadata
+    return timestamp, version, is_stable, normalized_tag, tag
+
+
+def release_versions(repository, count, strategy="majorMinor"):
+    if strategy not in LATEST_RELEASE_STRATEGIES:
+        raise VersionedDocCError(f"invalid latest release strategy: {strategy}")
+
     parsed = []
-    for tag in tags:
-        match = SEMVER.match(tag)
-        if match:
-            version = tuple(map(int, match.groups()))
-            tag_without_build_metadata = tag.lstrip("v").split("+", 1)[0]
-            is_stable = "-" not in tag_without_build_metadata
-            parsed.append((version, is_stable, tag))
-    parsed.sort(reverse=True)
+    if strategy == "tagDate":
+        lines = git(
+            repository,
+            "for-each-ref",
+            "--format=%(creatordate:unix)\t%(refname:strip=2)",
+            "refs/tags",
+        ).splitlines()
+        for line in lines:
+            timestamp_text, separator, tag = line.partition("\t")
+            if not separator:
+                continue
+            try:
+                timestamp = int(timestamp_text)
+            except ValueError:
+                continue
+            entry = parsed_release_tag(tag, timestamp)
+            if entry:
+                parsed.append(entry)
+        parsed.sort(reverse=True)
+    else:
+        for tag in git(repository, "tag", "--list").splitlines():
+            entry = parsed_release_tag(tag)
+            if entry:
+                parsed.append(entry)
+        parsed.sort(key=lambda entry: entry[1:], reverse=True)
+
     selected = []
-    selected_series = set()
-    for version, _, tag in parsed:
-        series = version[:2]
-        if series in selected_series:
+    selected_keys = set()
+    for _, version, _, normalized_tag, tag in parsed:
+        key = version[:2] if strategy == "majorMinor" else normalized_tag
+        if key in selected_keys:
             continue
         selected.append(tag)
-        selected_series.add(series)
+        selected_keys.add(key)
         if len(selected) == count:
             break
     return selected
+
+
+def semantic_versions(repository, count):
+    return release_versions(repository, count, "majorMinor")
 
 
 def semantic_version_series(tag):
@@ -309,17 +345,29 @@ def configured_versions(repository, config):
         versions = config["versions"]
     else:
         policy = config.get("releasePolicy", {"latest": 2})
+        if not isinstance(policy, dict):
+            raise VersionedDocCError("releasePolicy must be an object")
         development = policy.get("development", {"name": "main", "ref": "HEAD"})
         versions = [development]
-        selected_tags = semantic_versions(repository, int(policy.get("latest", 2)))
-        selected_series = {semantic_version_series(tag) for tag in selected_tags}
+        latest = policy.get("latest", 2)
+        if isinstance(latest, bool) or not isinstance(latest, int) or latest < 1:
+            raise VersionedDocCError("releasePolicy.latest must be a positive integer")
+        latest_strategy = policy.get("latestStrategy", "majorMinor")
+        selected_tags = release_versions(repository, latest, latest_strategy)
+        if latest_strategy == "majorMinor":
+            selected_keys = {semantic_version_series(tag) for tag in selected_tags}
+        else:
+            selected_keys = {tag.removeprefix("v") for tag in selected_tags}
         for tag in policy.get("pinned", []):
             if not isinstance(tag, str) or not SEMVER.fullmatch(tag):
                 raise VersionedDocCError(f"invalid pinned release: {tag}")
-            series = semantic_version_series(tag)
-            if series not in selected_series:
+            if latest_strategy == "majorMinor":
+                key = semantic_version_series(tag)
+            else:
+                key = tag.removeprefix("v")
+            if key not in selected_keys:
                 selected_tags.append(tag)
-                selected_series.add(series)
+                selected_keys.add(key)
         versions.extend(
             {"name": tag.lstrip("v"), "ref": tag}
             for tag in selected_tags

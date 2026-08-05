@@ -183,7 +183,7 @@ class VersionedDocCTests(unittest.TestCase):
                 "pinned": ["0.19.0"],
             },
         }
-        with mock.patch.object(versioned_docc, "semantic_versions", return_value=["0.20.1"]):
+        with mock.patch.object(versioned_docc, "release_versions", return_value=["0.20.1"]):
             versions = versioned_docc.configured_versions(Path("/unused"), config)
 
         self.assertEqual(
@@ -211,6 +211,45 @@ class VersionedDocCTests(unittest.TestCase):
 
         self.assertEqual(versions, ["0.2.1", "0.1.0"])
 
+    def test_release_versions_can_select_highest_semantic_versions(self):
+        tags = "\n".join(["0.19.0", "0.20.0", "0.20.1"])
+        with mock.patch.object(versioned_docc, "git", return_value=tags):
+            versions = versioned_docc.release_versions(
+                Path("/unused"), 2, "semanticVersion"
+            )
+
+        self.assertEqual(versions, ["0.20.1", "0.20.0"])
+
+    def test_release_versions_can_select_most_recent_tag_dates(self):
+        tags = "\n".join(
+            [
+                "100\t0.19.0",
+                "200\t0.20.1",
+                "300\t0.19.1",
+            ]
+        )
+        with mock.patch.object(versioned_docc, "git", return_value=tags):
+            versions = versioned_docc.release_versions(
+                Path("/unused"), 2, "tagDate"
+            )
+
+        self.assertEqual(versions, ["0.19.1", "0.20.1"])
+
+    def test_release_policy_rejects_unknown_latest_strategy(self):
+        config = {
+            "defaultVersion": "main",
+            "releasePolicy": {
+                "latest": 2,
+                "latestStrategy": "unknown",
+            },
+        }
+
+        with self.assertRaisesRegex(
+            versioned_docc.VersionedDocCError,
+            "invalid latest release strategy",
+        ):
+            versioned_docc.configured_versions(Path("/unused"), config)
+
     def test_release_policy_deduplicates_latest_pinned_release_series(self):
         config = {
             "defaultVersion": "main",
@@ -219,7 +258,7 @@ class VersionedDocCTests(unittest.TestCase):
                 "pinned": ["0.20.0"],
             },
         }
-        with mock.patch.object(versioned_docc, "semantic_versions", return_value=["0.20.1"]):
+        with mock.patch.object(versioned_docc, "release_versions", return_value=["0.20.1"]):
             versions = versioned_docc.configured_versions(Path("/unused"), config)
 
         self.assertEqual(
@@ -227,6 +266,29 @@ class VersionedDocCTests(unittest.TestCase):
             [
                 {"name": "main", "ref": "HEAD"},
                 {"name": "0.20.1", "ref": "0.20.1"},
+            ],
+        )
+
+    def test_release_policy_keeps_pinned_patch_for_semantic_version_strategy(self):
+        config = {
+            "defaultVersion": "main",
+            "releasePolicy": {
+                "latest": 1,
+                "latestStrategy": "semanticVersion",
+                "pinned": ["0.20.0"],
+            },
+        }
+        with mock.patch.object(
+            versioned_docc, "release_versions", return_value=["0.20.1"]
+        ):
+            versions = versioned_docc.configured_versions(Path("/unused"), config)
+
+        self.assertEqual(
+            versions,
+            [
+                {"name": "main", "ref": "HEAD"},
+                {"name": "0.20.1", "ref": "0.20.1"},
+                {"name": "0.20.0", "ref": "0.20.0"},
             ],
         )
 

@@ -46,7 +46,12 @@
           "type": "integer",
           "minimum": 1,
           "default": 2,
-          "description": "Number of distinct major.minor release series to publish; only the highest patch tag from each series is selected."
+          "description": "Number of releases selected according to latestStrategy."
+        },
+        "latestStrategy": {
+          "enum": ["majorMinor", "semanticVersion", "tagDate"],
+          "default": "majorMinor",
+          "description": "Select the highest patch from distinct major.minor series, the highest semantic versions, or the most recently created Git tags."
         },
         "development": {
           "type": "object",

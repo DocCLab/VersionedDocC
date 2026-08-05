@@ -65,8 +65,8 @@ Add `.vdc.json` to the package root:
   "hostingBasePath": "/ExampleKit",
   "defaultVersion": "main",
   "releasePolicy": {
-    "latest": 1,
-    "pinned": ["0.19.0"],
+    "latest": 2,
+    "latestStrategy": "majorMinor",
     "development": { "name": "main", "ref": "HEAD" }
   },
   "sourceRepository": "https://github.com/Example/ExampleKit",
@@ -100,13 +100,25 @@ The CLI, SwiftPM plugin, composite action, and reusable workflow discover this
 file automatically. Use `--config` or the `config` action input only for a
 nonstandard path.
 
-`latest` follows the newest distinct `major.minor` release series automatically,
-using only the highest patch tag from each series. For example, `latest: 2`
-selects `0.20.1` and `0.19.3` instead of publishing `0.20.1` alongside `0.20.0`.
+`latest` controls how many releases are selected. `latestStrategy` supports
+three policies:
+
+- `majorMinor` (default) selects the newest distinct `major.minor` series and
+  keeps only the highest patch from each series. For example, `latest: 2`
+  selects `0.20.1` and `0.19.3`, not both `0.20.1` and `0.20.0`.
+- `semanticVersion` selects the highest semantic-version tags, including
+  multiple patches from one series. For example, it can select `0.20.1` and
+  `0.20.0`.
+- `tagDate` selects tags by Git creator date, newest first. If `0.19.1` is
+  created after `0.20.1`, `latest: 2` selects `0.19.1` and `0.20.1`.
+
+For annotated tags, `tagDate` uses the tagger date; for lightweight tags, Git
+uses the tagged commit's date.
 `pinned` adds stable comparison baselines without duplicating a release series
-already selected by `latest`. An explicit `versions` array remains exact and is
-not grouped by release series. The example currently publishes `main`, the
-newest release series, and `0.19.0`.
+already selected by `latest` under `majorMinor`. With another strategy, only an
+exact duplicate is omitted. An explicit `versions` array remains exact and is
+not grouped by release series. The example publishes `main` and the newest
+release series.
 API Changes pages show 10 entries per page by default. Consumers can override
 the presentation-only value with `apiChanges.pageSize`; changing it reassembles
 the site without invalidating version documentation caches.
