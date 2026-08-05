@@ -72,7 +72,7 @@ Add or adapt a documentation workflow that:
    configuration and complete tag history are available on tag-triggered runs.
 3. Restores `.docs/cache/versioned-docc` with a rolling GitHub Actions cache.
 4. Selects the required Xcode/toolchain and DocC renderer before building.
-5. Invokes `OpenSwiftUIProject/VersionedDocC@<stable-tag>` with `.vdc.json`.
+5. Invokes `DocCLab/VersionedDocC@<stable-tag>` with `.vdc.json`.
 6. Uploads `.docs/build/versioned-site/<projectName>` as the Pages artifact and
    deploys it with `actions/deploy-pages`.
 
