@@ -27,6 +27,8 @@ and `docc` executables. It does not fork Swift-DocC or Swift-DocC Render.
 
 ## Examples
 
+- **OpenSwiftUI:** [GitHub repository](https://github.com/OpenSwiftUIProject/OpenSwiftUI)
+  · [Live versioned documentation](https://openswiftuiproject.github.io/OpenSwiftUI/main/)
 - **ScreenShieldKit:** [GitHub repository](https://github.com/Kyle-Ye/ScreenShieldKit)
   · [Live versioned documentation](https://kyle-ye.github.io/ScreenShieldKit/main/)
 
