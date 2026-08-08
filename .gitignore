@@ -1,4 +1,5 @@
 .build/
+.docs/
 .swiftpm/
 .DS_Store
 *.pyc

@@ -1,0 +1,23 @@
+{
+  "$schema": "https://raw.githubusercontent.com/DocCLab/VersionedDocC/0.0.13/Schema/VersionedDocC.schema.json",
+  "schemaVersion": 1,
+  "documentationOnly": true,
+  "projectName": "VersionedDocC",
+  "modulePath": "versioneddocc",
+  "catalogPath": "Documentation/VersionedDocC.docc",
+  "hostingBasePath": "/VersionedDocC",
+  "defaultVersion": "main",
+  "historicalCatalogFallback": "current",
+  "articleChanges": {
+    "enabled": true
+  },
+  "releasePolicy": {
+    "latest": 1,
+    "latestStrategy": "semanticVersion",
+    "development": {
+      "name": "main",
+      "ref": "HEAD"
+    }
+  },
+  "sourceRepository": "https://github.com/DocCLab/VersionedDocC"
+}

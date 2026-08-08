@@ -3,6 +3,11 @@ name: Versioned DocC Pages
 on:
   workflow_call:
     inputs:
+      ref:
+        description: Branch or commit to check out before building documentation
+        required: false
+        default: ""
+        type: string
       config:
         description: VersionedDocC configuration path
         required: false
@@ -36,6 +41,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
+          ref: ${{ inputs.ref || github.ref }}
           fetch-depth: 0
       - uses: actions/cache@v6
         with:

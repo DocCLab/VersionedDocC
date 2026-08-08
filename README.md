@@ -1,5 +1,7 @@
 # VersionedDocC
 
+[Documentation](https://docclab.github.io/VersionedDocC/)
+
 VersionedDocC builds Swift-DocC documentation for a development branch and
 published releases, stores each version as an immutable artifact, and assembles
 a version-aware static website. Swift packages also get public API comparisons

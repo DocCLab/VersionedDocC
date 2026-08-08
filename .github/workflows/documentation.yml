@@ -1,0 +1,26 @@
+name: Documentation
+
+on:
+  push:
+    branches: [main]
+    tags: ["*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  documentation:
+    uses: ./.github/workflows/pages.yml
+    with:
+      ref: main
+      config: .vdc.json
+      artifact-path: .docs/build/versioned-site/VersionedDocC
+      deploy: true
