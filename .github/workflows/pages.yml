@@ -58,9 +58,17 @@ jobs:
       - uses: oras-project/setup-oras@v1
       - name: Log in to GitHub Container Registry
         run: echo "${{ github.token }}" | oras login ghcr.io --username "${{ github.actor }}" --password-stdin
+      - name: Check out released VersionedDocC
+        if: ${{ !inputs.use-local-action }}
+        uses: actions/checkout@v7
+        with:
+          repository: DocCLab/VersionedDocC
+          ref: 0.0.15
+          path: .versioned-docc-action
+          fetch-depth: 1
       - name: Build with released VersionedDocC
         if: ${{ !inputs.use-local-action }}
-        uses: DocCLab/VersionedDocC@0.0.15
+        uses: ./.versioned-docc-action
         with:
           config: ${{ inputs.config }}
           publish-oci-cache: ${{ inputs.publish-oci-cache }}
