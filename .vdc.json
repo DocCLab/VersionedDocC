@@ -1,5 +1,5 @@
 {
-  "$schema": "https://raw.githubusercontent.com/DocCLab/VersionedDocC/0.0.13/Schema/VersionedDocC.schema.json",
+  "$schema": "https://raw.githubusercontent.com/DocCLab/VersionedDocC/0.0.14/Schema/VersionedDocC.schema.json",
   "schemaVersion": 1,
   "documentationOnly": true,
   "projectName": "VersionedDocC",
@@ -10,6 +10,11 @@
   "historicalCatalogFallback": "current",
   "articleChanges": {
     "enabled": true
+  },
+  "siteUI": {
+    "showEdit": true,
+    "showStar": true,
+    "showPoweredBy": true
   },
   "releasePolicy": {
     "latest": 1,

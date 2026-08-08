@@ -16,9 +16,10 @@ import tempfile
 from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from urllib.parse import quote, unquote, urlsplit
 
 
-VERSION = "0.0.13"
+VERSION = "0.0.14"
 DEFAULT_CONFIG = ".vdc.json"
 # Keep this stable across releases that only change assembly, routing, or the
 # command interface. Bump it only when the per-version DocC cache contents must
@@ -31,6 +32,7 @@ OCI_ARTIFACT_TYPE = "application/vnd.openswiftuiproject.versioned-docc.cache.v1"
 OCI_CONFIG_TYPE = "application/vnd.openswiftuiproject.versioned-docc.cache.config.v1+json"
 OCI_LAYER_TYPE = "application/vnd.openswiftuiproject.versioned-docc.cache.layer.v1.tar+gzip"
 OCI_ARCHIVE_NAME = "versioned-docc-cache.tar.gz"
+VERSIONED_DOCC_REPOSITORY = "https://github.com/DocCLab/VersionedDocC"
 
 
 class VersionedDocCError(RuntimeError):
@@ -241,6 +243,23 @@ def load_config(package_root, config_path):
     config["articleChanges"].setdefault("enabled", False)
     if not isinstance(config["articleChanges"]["enabled"], bool):
         raise VersionedDocCError("articleChanges.enabled must be a boolean")
+    config.setdefault("siteUI", {})
+    site_ui = config["siteUI"]
+    if not isinstance(site_ui, dict):
+        raise VersionedDocCError("siteUI must be an object")
+    repository_ui_default = bool(config.get("sourceRepository"))
+    site_ui.setdefault("showEdit", repository_ui_default)
+    site_ui.setdefault("showStar", repository_ui_default)
+    site_ui.setdefault("showPoweredBy", True)
+    for key in ("showEdit", "showStar", "showPoweredBy"):
+        if not isinstance(site_ui[key], bool):
+            raise VersionedDocCError(f"siteUI.{key} must be a boolean")
+    if (site_ui["showEdit"] or site_ui["showStar"]) and not config.get(
+        "sourceRepository"
+    ):
+        raise VersionedDocCError(
+            "siteUI.showEdit and siteUI.showStar require sourceRepository"
+        )
     if "ociCache" in config:
         oci_cache = config["ociCache"]
         if not isinstance(oci_cache, dict) or not oci_cache.get("repository"):
@@ -588,11 +607,33 @@ def changes_enabled(config):
     return not config["documentationOnly"] or article_changes_enabled(config)
 
 
+def external_link_attributes():
+    return 'target="_blank" rel="noopener noreferrer"'
+
+
+def site_ui_value(config, key):
+    default = True if key == "showPoweredBy" else bool(config.get("sourceRepository"))
+    return config.get("siteUI", {}).get(key, default)
+
+
+def star_link(config):
+    if not site_ui_value(config, "showStar"):
+        return ""
+    repository = html.escape(config["sourceRepository"].rstrip("/"), quote=True)
+    return (
+        f'<a class="versioned-docc-star" href="{repository}" '
+        f'{external_link_attributes()} aria-label="Star {html.escape(config["projectName"])} on GitHub">'
+        '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 0C3.58 0 0 3.64 0 8.13c0 3.59 '
+        '2.29 6.64 5.47 7.71.4.08.55-.18.55-.39 0-.19-.01-.83-.01-1.51-2.01.38-2.53-.5-2.69-.96-.09-.23-.48-.96-.82-1.15-.28-.15-.68-.52-.01-.53.63-.01 1.08.59 1.23.83.72 1.23 1.87.88 2.33.67.07-.53.28-.88.51-1.08-1.78-.21-3.64-.91-3.64-4.02 0-.89.31-1.62.82-2.19-.08-.2-.36-1.04.08-2.16 0 0 .67-.22 2.2.84A7.5 7.5 0 0 1 8 3.94a7.5 7.5 0 0 1 2 .27c1.53-1.06 2.2-.84 2.2-.84.44 1.12.16 1.96.08 2.16.51.57.82 1.3.82 2.19 0 3.12-1.87 3.81-3.65 4.02.29.25.54.74.54 1.5 0 1.08-.01 1.95-.01 2.22 0 .22.15.48.55.39A8.14 8.14 0 0 0 16 8.13C16 3.64 12.42 0 8 0Z"/></svg>'
+        '<span>Star on GitHub</span></a>'
+    )
+
+
 def render_header(template, config, version, build_date):
     base = config["hostingBasePath"]
     module_path = config["modulePath"]
     replacements = {
-        "__VERSIONED_DOCC_PROJECT_NAME__": config["projectName"],
+        "__VERSIONED_DOCC_PROJECT_NAME__": html.escape(config["projectName"]),
         "__VERSIONED_DOCC_HOME_PATH__": f"{base}/{version}/documentation/{module_path}/",
         "__VERSIONED_DOCC_CHANGES_LINK__": (
             f'<a class="versioned-docc-changes" '
@@ -603,10 +644,57 @@ def render_header(template, config, version, build_date):
         else "",
         "__VERSIONED_DOCC_BUILD_DATE__": build_date,
         "__VERSIONED_DOCC_CURRENT_VERSION__": version,
+        "__VERSIONED_DOCC_STAR_LINK__": star_link(config),
     }
     for token, value in replacements.items():
         template = template.replace(token, value)
     return template
+
+
+def render_footer(template, config, version):
+    show_edit = site_ui_value(config, "showEdit")
+    show_powered_by = site_ui_value(config, "showPoweredBy")
+    if not show_edit and not show_powered_by:
+        return ""
+    edit_link = (
+        f'<a class="versioned-docc-edit" href="#" hidden '
+        f'{external_link_attributes()}>Edit this page</a>'
+        if show_edit
+        else ""
+    )
+    powered_by_link = (
+        f'<a class="versioned-docc-powered-by" '
+        f'href="{VERSIONED_DOCC_REPOSITORY}" {external_link_attributes()}>'
+        "Powered by VersionedDocC</a>"
+        if show_powered_by
+        else ""
+    )
+    replacements = {
+        "__VERSIONED_DOCC_EDIT_LINK__": edit_link,
+        "__VERSIONED_DOCC_POWERED_BY_LINK__": powered_by_link,
+        "__VERSIONED_DOCC_SITE_ROOT_JSON__": json.dumps(
+            f'{config["hostingBasePath"]}/{version}'
+        ),
+    }
+    for token, value in replacements.items():
+        template = template.replace(token, value)
+    return template
+
+
+def append_custom_footer(catalog, rendered_footer):
+    if not rendered_footer:
+        return
+    footer_path = catalog / "footer.html"
+    existing_footer = (
+        footer_path.read_text(encoding="utf-8") if footer_path.is_file() else ""
+    )
+    separator = ""
+    if existing_footer:
+        separator = "\n" if existing_footer.endswith("\n") else "\n\n"
+    footer_path.write_text(
+        existing_footer + separator + rendered_footer,
+        encoding="utf-8",
+    )
 
 
 def source_service_arguments(config, version, source_root):
@@ -623,7 +711,125 @@ def source_service_arguments(config, version, source_root):
     ]
 
 
-def build_fingerprint(config, docc_binary, header_template):
+def github_edit_url(source_url):
+    if not isinstance(source_url, str):
+        return None
+    parsed = urlsplit(source_url)
+    if parsed.scheme not in ("http", "https") or not parsed.netloc:
+        return None
+    marker = "/blob/"
+    if marker not in parsed.path:
+        return None
+    return source_url.replace(marker, "/edit/", 1)
+
+
+def repository_edit_url(repository, reference, source_path):
+    encoded_reference = quote(reference, safe="/@:+-._~")
+    encoded_path = quote(Path(source_path).as_posix(), safe="/@:+-._~()")
+    return f"{repository.rstrip('/')}/edit/{encoded_reference}/{encoded_path}"
+
+
+def edit_source_key(value):
+    value = unquote(value).strip().strip("`")
+    return re.sub(r"\s+", "-", value).casefold()
+
+
+def markdown_edit_sources(catalog, repository_catalog_path, repository, reference):
+    candidates = {}
+    technology_roots = []
+
+    def register(key, candidate):
+        key = edit_source_key(key)
+        if not key:
+            return
+        existing = candidates.get(key)
+        candidates[key] = candidate if existing in (None, candidate) else False
+
+    for markdown in sorted(catalog.rglob("*.md")):
+        relative_path = markdown.relative_to(catalog)
+        repository_path = Path(repository_catalog_path) / relative_path
+        candidate = {
+            "editURL": repository_edit_url(repository, reference, repository_path),
+            "fileName": markdown.name,
+        }
+        register(markdown.stem, candidate)
+        contents = markdown.read_text(encoding="utf-8", errors="replace")
+        if "@TechnologyRoot" in contents:
+            technology_roots.append(candidate)
+        heading = re.search(r"(?m)^#\s+``([^`]+)``\s*$", contents)
+        if heading:
+            symbol_name = heading.group(1).rsplit("/", 1)[-1]
+            register(symbol_name, candidate)
+    return candidates, technology_roots
+
+
+def inject_edit_metadata(
+    site_root,
+    catalog,
+    repository_catalog_path,
+    config,
+    version,
+    edit_reference,
+):
+    if not site_ui_value(config, "showEdit"):
+        return 0
+    repository = config["sourceRepository"].rstrip("/")
+    candidates, technology_roots = markdown_edit_sources(
+        catalog,
+        repository_catalog_path,
+        repository,
+        edit_reference,
+    )
+    documentation_root = site_root / "data" / "documentation"
+    injected = 0
+    authored = 0
+    remote = 0
+    if not documentation_root.is_dir():
+        return 0
+    for path in documentation_root.rglob("*.json"):
+        with path.open(encoding="utf-8") as source:
+            document = json.load(source)
+        metadata = document.get("metadata", {})
+        identifier = document.get("identifier", {}).get("url", "")
+        identifier_component = identifier.rsplit("/", 1)[-1]
+        candidate = candidates.get(edit_source_key(identifier_component))
+        if candidate is False:
+            candidate = None
+        if (
+            candidate is None
+            and config["documentationOnly"]
+            and metadata.get("role") == "collection"
+            and len(technology_roots) == 1
+        ):
+            candidate = technology_roots[0]
+        edit_url = candidate.get("editURL") if candidate else None
+        source_file = candidate.get("fileName") if candidate else None
+        if edit_url:
+            authored += 1
+        else:
+            edit_url = github_edit_url(metadata.get("remoteSource", {}).get("url"))
+            if edit_url:
+                remote += 1
+        if not edit_url:
+            continue
+        versioned_metadata = metadata.setdefault("versionedDocC", {})
+        versioned_metadata["editURL"] = edit_url
+        if source_file:
+            versioned_metadata["sourceFile"] = source_file
+        document["metadata"] = metadata
+        path.write_text(
+            json.dumps(document, separators=(",", ":")) + "\n",
+            encoding="utf-8",
+        )
+        injected += 1
+    print(
+        f"{version['name']}: added edit links to {injected} pages "
+        f"({authored} authored, {remote} source declarations)"
+    )
+    return injected
+
+
+def build_fingerprint(config, docc_binary, header_template, footer_template=""):
     renderer_path = os.environ.get("DOCC_HTML_DIR")
     if renderer_path:
         renderer = resolve_path(Path.cwd(), renderer_path)
@@ -639,6 +845,8 @@ def build_fingerprint(config, docc_binary, header_template):
         "docc": sha256_file(docc_binary),
         "renderer": renderer_id,
         "header": sha256_bytes(header_template.encode()),
+        "footer": sha256_bytes(footer_template.encode()),
+        "siteUI": config.get("siteUI", {}),
         "documentationOnly": config.get("documentationOnly", False),
         "target": config.get("targetName"),
         "module": config.get("moduleName"),
@@ -990,9 +1198,12 @@ def build_symbol_graphs(source_root, config, version, graph_root, logs_root):
                     "-skip-protocol-implementations",
                 ]
             )
+        build_environment = dict(config["environment"])
+        build_environment["VDC_GENERATE_DOCS"] = "1"
         run(
             build_command,
-            environment=config["environment"],
+            cwd=source_root,
+            environment=build_environment,
             log_path=logs_root
             / f"{version['name']}{log_suffix}-swift-build.log",
         )
@@ -1014,6 +1225,7 @@ def build_version(
     fingerprint,
     build_date,
     header_template,
+    footer_template,
     docc_command,
 ):
     cache_entry = cache_root / version["name"]
@@ -1037,6 +1249,8 @@ def build_version(
             )
             source_catalog = source_root / configured_catalog_path
             catalog_fallback_source_commit = None
+            edit_catalog_path = configured_catalog_path
+            edit_reference = source_reference(config, version)
             if not source_catalog.is_dir():
                 fallback_catalog = package_root / config["catalogPath"]
                 if (
@@ -1048,6 +1262,8 @@ def build_version(
                     catalog_fallback_source_commit = git(
                         package_root, "rev-parse", "HEAD"
                     )
+                    edit_catalog_path = config["catalogPath"]
+                    edit_reference = catalog_fallback_source_commit
                     print(
                         f"{version['name']}: using current DocC catalog "
                         f"({catalog_fallback_source_commit[:8]})"
@@ -1062,6 +1278,8 @@ def build_version(
                 render_header(header_template, config, version["name"], build_date),
                 encoding="utf-8",
             )
+            rendered_footer = render_footer(footer_template, config, version["name"])
+            append_custom_footer(catalog, rendered_footer)
             docc = [
                 *docc_command,
                 "convert",
@@ -1088,6 +1306,14 @@ def build_version(
             run(docc, log_path=logs_root / f"{version['name']}-docc.log")
             if not (staging / "site" / "index.html").is_file():
                 raise VersionedDocCError(f"DocC emitted no index for {version['name']}")
+            inject_edit_metadata(
+                staging / "site",
+                catalog,
+                edit_catalog_path,
+                config,
+                version,
+                edit_reference,
+            )
             theme_settings = staging / "site" / "theme-settings.json"
             if not theme_settings.exists():
                 theme_settings.write_text("{}\n", encoding="utf-8")
@@ -1371,6 +1597,14 @@ def assemble(package_root, config, versions, cache_root, output_path, build_date
         "--page-size",
         str(config["apiChanges"]["pageSize"]),
     ]
+    if site_ui_value(config, "showStar"):
+        api_command.extend(
+            ["--star-repository-url", config["sourceRepository"].rstrip("/")]
+        )
+    if site_ui_value(config, "showPoweredBy"):
+        api_command.extend(
+            ["--powered-by-url", VERSIONED_DOCC_REPOSITORY]
+        )
     for version in versions:
         if not config["documentationOnly"]:
             graph_paths = module_symbol_graph_paths(
@@ -1416,8 +1650,11 @@ def build_command(arguments):
     if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", build_date):
         raise VersionedDocCError("build date must use YYYY-MM-DD")
     header_template = Path(__file__).with_name("header.html").read_text(encoding="utf-8")
+    footer_template = Path(__file__).with_name("footer.html").read_text(encoding="utf-8")
     docc_command, docc_binary = find_docc()
-    base_fingerprint = build_fingerprint(config, docc_binary, header_template)
+    base_fingerprint = build_fingerprint(
+        config, docc_binary, header_template, footer_template
+    )
     oci_cache = config.get("ociCache")
     if arguments.publish_oci_cache and not oci_cache:
         raise VersionedDocCError("--publish-oci-cache requires ociCache configuration")
@@ -1484,6 +1721,7 @@ def build_command(arguments):
                 fingerprint,
                 build_date,
                 header_template,
+                footer_template,
                 docc_command,
             )
         if arguments.publish_oci_cache and uses_remote:

@@ -1,0 +1,86 @@
+<style>
+  :host {
+    --versioned-docc-footer-border: rgba(0, 0, 0, 0.12);
+    --versioned-docc-footer-primary: #1d1d1f;
+    --versioned-docc-footer-secondary: #6e6e73;
+    display: block;
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif;
+  }
+  :host([data-color-scheme="dark"]) {
+    --versioned-docc-footer-border: rgba(255, 255, 255, 0.18);
+    --versioned-docc-footer-primary: #f5f5f7;
+    --versioned-docc-footer-secondary: #a1a1a6;
+  }
+  .versioned-docc-footer {
+    align-items: center;
+    border-top: 1px solid var(--versioned-docc-footer-border);
+    color: var(--versioned-docc-footer-secondary);
+    display: flex;
+    font-size: 12px;
+    justify-content: space-between;
+    margin-top: 48px;
+    min-height: 56px;
+    padding: 14px max(24px, calc((100vw - 1080px) / 2));
+  }
+  .versioned-docc-footer a { color: #06c; font-weight: 500; text-decoration: none; }
+  .versioned-docc-footer a:hover { text-decoration: underline; }
+  .versioned-docc-powered-by { color: var(--versioned-docc-footer-secondary) !important; font-weight: 400 !important; }
+  @media (prefers-color-scheme: dark) {
+    :host([data-color-scheme="auto"]) {
+      --versioned-docc-footer-border: rgba(255, 255, 255, 0.18);
+      --versioned-docc-footer-primary: #f5f5f7;
+      --versioned-docc-footer-secondary: #a1a1a6;
+    }
+  }
+  @media (max-width: 680px) {
+    .versioned-docc-footer { align-items: flex-start; flex-direction: column; gap: 8px; padding: 14px 16px; }
+  }
+</style>
+<footer class="versioned-docc-footer">
+  <span>__VERSIONED_DOCC_EDIT_LINK__</span>
+  <span>__VERSIONED_DOCC_POWERED_BY_LINK__</span>
+</footer>
+<script>
+(() => {
+  const editLink = document.querySelector("custom-footer")?.shadowRoot?.querySelector(".versioned-docc-edit");
+  if (!editLink) return;
+  const siteRoot = __VERSIONED_DOCC_SITE_ROOT_JSON__;
+  let updateSequence = 0;
+
+  async function updateEditLink() {
+    const sequence = ++updateSequence;
+    editLink.hidden = true;
+    let path = window.location.pathname;
+    if (!path.startsWith(siteRoot + "/")) return;
+    path = path.slice(siteRoot.length + 1).replace(/\/index\.html$/, "").replace(/\/$/, "");
+    if (!path || path === "changes") return;
+    try {
+      const response = await fetch(siteRoot + "/data/" + path + ".json", { credentials: "same-origin" });
+      if (!response.ok) return;
+      const document = await response.json();
+      const editURL = document?.metadata?.versionedDocC?.editURL;
+      if (sequence !== updateSequence || typeof editURL !== "string" || !editURL) return;
+      editLink.href = editURL;
+      editLink.hidden = false;
+    } catch (_) {
+      // Pages without reliable source metadata intentionally omit the edit link.
+    }
+  }
+
+  if (!window.__versionedDocCNavigationEventsInstalled) {
+    window.__versionedDocCNavigationEventsInstalled = true;
+    for (const method of ["pushState", "replaceState"]) {
+      const original = window.history[method];
+      window.history[method] = function (...arguments_) {
+        const result = original.apply(this, arguments_);
+        window.dispatchEvent(new Event("versioned-docc-navigation"));
+        return result;
+      };
+    }
+  }
+  window.addEventListener("versioned-docc-navigation", updateEditLink);
+  window.addEventListener("popstate", updateEditLink);
+  window.addEventListener("pageshow", updateEditLink);
+  updateEditLink();
+})();
+</script>

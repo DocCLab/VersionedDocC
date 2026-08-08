@@ -6,6 +6,29 @@ assembled site will be hosted.
 VersionedDocC discovers `.vdc.json` at the package root. Pass `--config` or the
 action's `config` input only when you use a different path.
 
+## Configure site actions
+
+With `sourceRepository` configured, Edit and Star links are enabled by default.
+Use `siteUI` to make each choice explicit:
+
+```json
+"siteUI": {
+  "showEdit": true,
+  "showStar": true,
+  "showPoweredBy": true
+}
+```
+
+**Edit this page** uses the current documentation version's `sourceRef`.
+Authored articles and documentation extensions open their Markdown file in the
+GitHub editor; other symbol pages open the declaration source reported by DocC.
+Generated pages without reliable source metadata don't show an edit link.
+
+**Star on GitHub** appears in the header without loading a star counter or a
+third-party script. **Powered by VersionedDocC** appears at the bottom of DocC
+pages and the Changes dashboard. Set any field to `false` to hide that element.
+VersionedDocC appends its content after an existing custom DocC footer.
+
 ## Choose versions
 
 Use `releasePolicy` when releases follow semantic version tags:
@@ -73,7 +96,7 @@ A documentation repository without `Package.swift` can skip symbol graphs:
 
 ```json
 {
-  "$schema": "https://raw.githubusercontent.com/DocCLab/VersionedDocC/0.0.13/Schema/VersionedDocC.schema.json",
+  "$schema": "https://raw.githubusercontent.com/DocCLab/VersionedDocC/0.0.14/Schema/VersionedDocC.schema.json",
   "schemaVersion": 1,
   "documentationOnly": true,
   "projectName": "MyGuide",
@@ -82,6 +105,11 @@ A documentation repository without `Package.swift` can skip symbol graphs:
   "hostingBasePath": "/MyGuide",
   "defaultVersion": "main",
   "articleChanges": { "enabled": true },
+  "siteUI": {
+    "showEdit": true,
+    "showStar": true,
+    "showPoweredBy": true
+  },
   "releasePolicy": {
     "latest": 2,
     "development": { "name": "main", "ref": "HEAD" }

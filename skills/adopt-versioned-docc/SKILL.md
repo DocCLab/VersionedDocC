@@ -38,6 +38,12 @@ Set these fields from the package rather than guessing:
 - `sourceRepository`: canonical HTTPS GitHub repository URL.
 - `defaultVersion`: normally `main`.
 
+When `sourceRepository` is present, VersionedDocC enables **Edit this page** and
+**Star on GitHub** by default. Add `siteUI` only when the repository wants to
+make those defaults explicit or disable `showEdit`, `showStar`, or the default
+`showPoweredBy` footer. Verify authored article edit links as well as symbol
+source links during preview.
+
 For a standalone DocC catalog with no `Package.swift`, set
 `documentationOnly` to `true`, require an explicit `modulePath` matching the
 catalog's generated documentation route, and omit `moduleName`, `targetName`,

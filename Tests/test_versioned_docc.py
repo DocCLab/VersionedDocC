@@ -421,6 +421,96 @@ class VersionedDocCTests(unittest.TestCase):
 
         self.assertEqual(before, after)
 
+    def test_symbol_graph_build_runs_from_source_with_vdc_environment(self):
+        config = {
+            "targetName": "DemoKit",
+            "moduleName": "DemoKit",
+            "environment": {"EXAMPLE_SETTING": "enabled"},
+            "buildArguments": [],
+            "symbolGraph": {
+                "minimumAccessLevel": "public",
+                "skipProtocolImplementations": True,
+            },
+            "allowedModules": ["DemoKit"],
+        }
+        version = {"name": "main", "ref": "HEAD"}
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source_root = root / "DemoKit"
+            graph_root = root / "symbols"
+            logs_root = root / "logs"
+            source_root.mkdir()
+            graph_root.mkdir()
+            logs_root.mkdir()
+            (graph_root / "DemoKit.symbols.json").write_text(
+                json.dumps(
+                    {
+                        "module": {"name": "DemoKit"},
+                        "symbols": [],
+                        "relationships": [],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with mock.patch.object(versioned_docc, "run") as run:
+                versioned_docc.build_symbol_graphs(
+                    source_root,
+                    config,
+                    version,
+                    graph_root,
+                    logs_root,
+                )
+
+        _, arguments = run.call_args
+        self.assertEqual(arguments["cwd"], source_root)
+        self.assertEqual(
+            arguments["environment"],
+            {
+                "EXAMPLE_SETTING": "enabled",
+                "VDC_GENERATE_DOCS": "1",
+            },
+        )
+
+    def test_site_ui_and_footer_change_build_fingerprint(self):
+        config = {
+            "targetName": "DemoKit",
+            "moduleName": "DemoKit",
+            "catalogPath": "Sources/DemoKit/DemoKit.docc",
+            "environment": {},
+            "buildArguments": [],
+            "doccArguments": [],
+            "symbolGraph": {},
+            "allowedModules": ["DemoKit"],
+            "siteUI": {
+                "showEdit": False,
+                "showStar": False,
+                "showPoweredBy": True,
+            },
+        }
+        with (
+            mock.patch.object(versioned_docc, "run", return_value="Swift fixture"),
+            mock.patch.object(versioned_docc, "sha256_file", return_value="docc fixture"),
+        ):
+            baseline = versioned_docc.build_fingerprint(
+                config, Path("/docc"), "header", "footer"
+            )
+            changed_ui = versioned_docc.build_fingerprint(
+                {
+                    **config,
+                    "siteUI": {**config["siteUI"], "showStar": True},
+                },
+                Path("/docc"),
+                "header",
+                "footer",
+            )
+            changed_footer = versioned_docc.build_fingerprint(
+                config, Path("/docc"), "header", "changed footer"
+            )
+
+        self.assertNotEqual(baseline, changed_ui)
+        self.assertNotEqual(baseline, changed_footer)
+
     def test_github_pages_fallback_redirects_legacy_path_to_default_version(self):
         config = {
             "hostingBasePath": "/DemoKit",
@@ -490,6 +580,196 @@ class VersionedDocCTests(unittest.TestCase):
         )
 
         self.assertIn('href="/DemoKit/main/changes/">API Changes</a>', header)
+
+    def test_site_ui_renders_star_edit_and_powered_by_links(self):
+        header_template = (RESOURCE_ROOT / "header.html").read_text(encoding="utf-8")
+        footer_template = (RESOURCE_ROOT / "footer.html").read_text(encoding="utf-8")
+        config = {
+            "documentationOnly": True,
+            "hostingBasePath": "/Guide",
+            "defaultVersion": "main",
+            "modulePath": "guide",
+            "projectName": "Guide",
+            "sourceRepository": "https://github.com/Example/Guide",
+            "siteUI": {
+                "showEdit": True,
+                "showStar": True,
+                "showPoweredBy": True,
+            },
+        }
+
+        header = versioned_docc.render_header(
+            header_template, config, "main", "2026-08-08"
+        )
+        footer = versioned_docc.render_footer(footer_template, config, "main")
+
+        self.assertIn("Star on GitHub", header)
+        self.assertIn('href="https://github.com/Example/Guide"', header)
+        self.assertIn('target="_blank" rel="noopener noreferrer"', header)
+        self.assertIn("Edit this page", footer)
+        self.assertIn("Powered by VersionedDocC", footer)
+        self.assertIn('const siteRoot = "/Guide/main";', footer)
+        self.assertNotIn("__VERSIONED_DOCC_STAR_LINK__", header)
+        self.assertNotIn("__VERSIONED_DOCC_EDIT_LINK__", footer)
+        self.assertNotIn("__VERSIONED_DOCC_POWERED_BY_LINK__", footer)
+        self.assertNotIn("__VERSIONED_DOCC_SITE_ROOT_JSON__", footer)
+
+    def test_site_ui_can_remove_all_optional_links(self):
+        header_template = (RESOURCE_ROOT / "header.html").read_text(encoding="utf-8")
+        footer_template = (RESOURCE_ROOT / "footer.html").read_text(encoding="utf-8")
+        config = {
+            "documentationOnly": True,
+            "hostingBasePath": "/Guide",
+            "defaultVersion": "main",
+            "modulePath": "guide",
+            "projectName": "Guide",
+            "sourceRepository": "https://github.com/Example/Guide",
+            "siteUI": {
+                "showEdit": False,
+                "showStar": False,
+                "showPoweredBy": False,
+            },
+        }
+
+        header = versioned_docc.render_header(
+            header_template, config, "main", "2026-08-08"
+        )
+
+        self.assertNotIn("Star on GitHub", header)
+        self.assertEqual(versioned_docc.render_footer(footer_template, config, "main"), "")
+
+    def test_versioned_docc_footer_preserves_catalog_footer(self):
+        with tempfile.TemporaryDirectory() as directory:
+            catalog = Path(directory) / "Guide.docc"
+            catalog.mkdir()
+            footer = catalog / "footer.html"
+            existing = "<footer>Existing footer</footer>  \n"
+            footer.write_text(existing, encoding="utf-8")
+
+            versioned_docc.append_custom_footer(
+                catalog, "<footer>VersionedDocC footer</footer>\n"
+            )
+
+            contents = footer.read_text(encoding="utf-8")
+            self.assertTrue(contents.startswith(existing))
+            self.assertTrue(contents.endswith("<footer>VersionedDocC footer</footer>\n"))
+
+    def test_edit_metadata_prefers_authored_markdown_and_falls_back_to_remote_source(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            catalog = root / "Guide.docc"
+            catalog.mkdir()
+            (catalog / "Guide.md").write_text(
+                "# Guide\n\n@Metadata { @TechnologyRoot }\n", encoding="utf-8"
+            )
+            (catalog / "Getting Started.md").write_text(
+                "# A Different Display Title\n", encoding="utf-8"
+            )
+            (catalog / "Widget.md").write_text(
+                "# ``Widget``\n\nExtended docs.\n", encoding="utf-8"
+            )
+            documentation = root / "site" / "data" / "documentation" / "guide"
+            documentation.mkdir(parents=True)
+
+            def write_document(relative_path, document):
+                path = root / "site" / "data" / "documentation" / relative_path
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(json.dumps(document), encoding="utf-8")
+                return path
+
+            root_path = write_document(
+                "guide.json",
+                {
+                    "kind": "article",
+                    "identifier": {"url": "doc://Guide/documentation/Guide"},
+                    "metadata": {"role": "collection", "title": "Guide"},
+                },
+            )
+            article_path = write_document(
+                "guide/getting-started.json",
+                {
+                    "kind": "article",
+                    "identifier": {
+                        "url": "doc://Guide/documentation/Guide/Getting-Started"
+                    },
+                    "metadata": {"role": "article", "title": "Different title"},
+                },
+            )
+            extension_path = write_document(
+                "guide/widget.json",
+                {
+                    "kind": "symbol",
+                    "identifier": {"url": "doc://Guide/documentation/Guide/Widget"},
+                    "metadata": {
+                        "role": "symbol",
+                        "remoteSource": {
+                            "url": "https://github.com/Example/Guide/blob/1.0.0/Sources/Widget.swift#L8"
+                        },
+                    },
+                },
+            )
+            symbol_path = write_document(
+                "guide/other.json",
+                {
+                    "kind": "symbol",
+                    "identifier": {"url": "doc://Guide/documentation/Guide/Other"},
+                    "metadata": {
+                        "role": "symbol",
+                        "remoteSource": {
+                            "url": "https://github.com/Example/Guide/blob/1.0.0/Sources/Other.swift#L3"
+                        },
+                    },
+                },
+            )
+            generated_path = write_document(
+                "guide/generated-implementations.json",
+                {
+                    "kind": "article",
+                    "identifier": {
+                        "url": "doc://Guide/documentation/Guide/Generated-Implementations"
+                    },
+                    "metadata": {"role": "article"},
+                },
+            )
+            config = {
+                "documentationOnly": True,
+                "sourceRepository": "https://github.com/Example/Guide",
+                "siteUI": {"showEdit": True},
+            }
+
+            count = versioned_docc.inject_edit_metadata(
+                root / "site",
+                catalog,
+                "Documentation/Guide.docc",
+                config,
+                {"name": "1.0.0"},
+                "release/1.0.0",
+            )
+
+            self.assertEqual(count, 4)
+            root_document = json.loads(root_path.read_text())
+            article = json.loads(article_path.read_text())
+            extension = json.loads(extension_path.read_text())
+            symbol = json.loads(symbol_path.read_text())
+            generated = json.loads(generated_path.read_text())
+            self.assertTrue(
+                root_document["metadata"]["versionedDocC"]["editURL"].endswith(
+                    "/edit/release/1.0.0/Documentation/Guide.docc/Guide.md"
+                )
+            )
+            self.assertIn(
+                "Getting%20Started.md",
+                article["metadata"]["versionedDocC"]["editURL"],
+            )
+            self.assertIn(
+                "/Documentation/Guide.docc/Widget.md",
+                extension["metadata"]["versionedDocC"]["editURL"],
+            )
+            self.assertEqual(
+                symbol["metadata"]["versionedDocC"]["editURL"],
+                "https://github.com/Example/Guide/edit/1.0.0/Sources/Other.swift#L3",
+            )
+            self.assertNotIn("versionedDocC", generated["metadata"])
 
     def test_legacy_routing_files_cover_project_and_deploy_roots(self):
         config = {
@@ -806,6 +1086,16 @@ class VersionedDocCTests(unittest.TestCase):
                 previous[identifier]["_digest"], reference_only[identifier]["_digest"]
             )
 
+            document["metadata"]["versionedDocC"] = {
+                "editURL": "https://github.com/Example/Guide/edit/main/Overview.md"
+            }
+            article_path.write_text(json.dumps(document), encoding="utf-8")
+            edit_metadata_only = api_changes.article_snapshot(documentation_root)
+            self.assertEqual(
+                previous[identifier]["_digest"],
+                edit_metadata_only[identifier]["_digest"],
+            )
+
             document["primaryContentSections"][0]["content"][0]["inlineContent"][0][
                 "text"
             ] = "After"
@@ -848,6 +1138,37 @@ class VersionedDocCTests(unittest.TestCase):
 
         self.assertIn("<title>Changes | Guide Documentation</title>", dashboard)
         self.assertIn('id="source"', dashboard)
+
+    def test_changes_dashboard_renders_configured_star_and_powered_by_links(self):
+        arguments = mock.Mock(
+            hosting_base_path="/Guide",
+            default_version="main",
+            module_path="guide",
+            project_name="Guide",
+            build_date="2026-08-08",
+            page_size=10,
+            star_repository_url="https://github.com/Example/Guide",
+            powered_by_url="https://github.com/DocCLab/VersionedDocC",
+        )
+        comparison = {
+            "id": "1.0-to-main",
+            "previousVersion": "1.0",
+            "currentVersion": "main",
+            "counts": {"added": 0, "modified": 0, "removed": 0},
+            "changes": [],
+        }
+
+        dashboard = api_changes.render_dashboard([comparison], arguments)
+
+        self.assertIn("Star on GitHub", dashboard)
+        self.assertIn("Powered by VersionedDocC", dashboard)
+        self.assertIn('target="_blank" rel="noopener noreferrer"', dashboard)
+
+        arguments.star_repository_url = None
+        arguments.powered_by_url = None
+        dashboard_without_links = api_changes.render_dashboard([comparison], arguments)
+        self.assertNotIn("Star on GitHub", dashboard_without_links)
+        self.assertNotIn("Powered by VersionedDocC", dashboard_without_links)
         self.assertIn("parameters.get('content')", dashboard)
         self.assertIn("articleDiff(change)", dashboard)
 
@@ -907,6 +1228,77 @@ class VersionedDocCTests(unittest.TestCase):
             path.write_text(json.dumps(config), encoding="utf-8")
             loaded, _ = versioned_docc.load_config(root, path)
             self.assertTrue(loaded["articleChanges"]["enabled"])
+
+    def test_site_ui_defaults_follow_source_repository_and_accept_overrides(self):
+        config = {
+            "schemaVersion": 1,
+            "documentationOnly": True,
+            "projectName": "Guide",
+            "modulePath": "guide",
+            "catalogPath": "Guide.docc",
+            "hostingBasePath": "/Guide",
+            "versions": [
+                {"name": "main", "ref": "HEAD"},
+                {"name": "1.0.0", "ref": "1.0.0"},
+            ],
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = root / ".vdc.json"
+            path.write_text(json.dumps(config), encoding="utf-8")
+            without_repository, _ = versioned_docc.load_config(root, path)
+            self.assertEqual(
+                without_repository["siteUI"],
+                {"showEdit": False, "showStar": False, "showPoweredBy": True},
+            )
+
+            config["sourceRepository"] = "https://github.com/Example/Guide"
+            path.write_text(json.dumps(config), encoding="utf-8")
+            with_repository, _ = versioned_docc.load_config(root, path)
+            self.assertEqual(
+                with_repository["siteUI"],
+                {"showEdit": True, "showStar": True, "showPoweredBy": True},
+            )
+
+            config["siteUI"] = {
+                "showEdit": False,
+                "showStar": False,
+                "showPoweredBy": False,
+            }
+            path.write_text(json.dumps(config), encoding="utf-8")
+            overridden, _ = versioned_docc.load_config(root, path)
+            self.assertEqual(overridden["siteUI"], config["siteUI"])
+
+    def test_site_ui_requires_boolean_values_and_repository_for_actions(self):
+        config = {
+            "schemaVersion": 1,
+            "documentationOnly": True,
+            "projectName": "Guide",
+            "modulePath": "guide",
+            "catalogPath": "Guide.docc",
+            "hostingBasePath": "/Guide",
+            "versions": [
+                {"name": "main", "ref": "HEAD"},
+                {"name": "1.0.0", "ref": "1.0.0"},
+            ],
+            "siteUI": {"showEdit": True},
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = root / ".vdc.json"
+            path.write_text(json.dumps(config), encoding="utf-8")
+            with self.assertRaisesRegex(
+                versioned_docc.VersionedDocCError, "require sourceRepository"
+            ):
+                versioned_docc.load_config(root, path)
+
+            config["sourceRepository"] = "https://github.com/Example/Guide"
+            config["siteUI"]["showEdit"] = "yes"
+            path.write_text(json.dumps(config), encoding="utf-8")
+            with self.assertRaisesRegex(
+                versioned_docc.VersionedDocCError, "siteUI.showEdit must be a boolean"
+            ):
+                versioned_docc.load_config(root, path)
 
     def test_documentation_only_configuration_does_not_require_swift_target(self):
         config = {

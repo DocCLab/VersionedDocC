@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://raw.githubusercontent.com/DocCLab/VersionedDocC/0.0.13/Schema/VersionedDocC.schema.json",
+  "$id": "https://raw.githubusercontent.com/DocCLab/VersionedDocC/0.0.14/Schema/VersionedDocC.schema.json",
   "title": "VersionedDocC configuration",
   "type": "object",
   "required": [
@@ -27,6 +27,26 @@
     "cachePath": { "type": "string" },
     "sourceRepository": { "type": "string", "format": "uri" },
     "developmentSourceRef": { "type": "string", "default": "main" },
+    "siteUI": {
+      "type": "object",
+      "description": "Optional GitHub page actions and VersionedDocC branding.",
+      "properties": {
+        "showEdit": {
+          "type": "boolean",
+          "description": "Show Edit this page when sourceRepository is configured. Defaults to true with a source repository and false otherwise."
+        },
+        "showStar": {
+          "type": "boolean",
+          "description": "Show Star on GitHub when sourceRepository is configured. Defaults to true with a source repository and false otherwise."
+        },
+        "showPoweredBy": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show the Powered by VersionedDocC footer link."
+        }
+      },
+      "additionalProperties": false
+    },
     "historicalCatalogFallback": { "enum": ["current"] },
     "versions": {
       "type": "array",
@@ -147,6 +167,19 @@
         { "required": ["versions"] },
         { "required": ["releasePolicy"] }
       ]
+    },
+    {
+      "if": { "not": { "required": ["sourceRepository"] } },
+      "then": {
+        "properties": {
+          "siteUI": {
+            "properties": {
+              "showEdit": { "const": false },
+              "showStar": { "const": false }
+            }
+          }
+        }
+      }
     }
   ],
   "additionalProperties": false

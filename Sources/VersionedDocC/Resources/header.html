@@ -32,6 +32,20 @@
   }
   .versioned-docc-metadata { align-items: center; display: flex; flex: none; gap: 14px; }
   .versioned-docc-changes { color: #06c; font-size: 12px; font-weight: 500; text-decoration: none; }
+  .versioned-docc-star {
+    align-items: center;
+    border: 1px solid var(--versioned-docc-border);
+    border-radius: 6px;
+    color: var(--versioned-docc-primary);
+    display: inline-flex;
+    font-size: 12px;
+    font-weight: 500;
+    gap: 5px;
+    padding: 4px 8px;
+    text-decoration: none;
+  }
+  .versioned-docc-star:hover { background: var(--versioned-docc-border); }
+  .versioned-docc-star svg { fill: currentColor; height: 14px; width: 14px; }
   .versioned-docc-version { align-items: center; display: flex; gap: 6px; }
   .versioned-docc-header select {
     appearance: auto;
@@ -54,7 +68,8 @@
   }
   @media (max-width: 680px) {
     .versioned-docc-header { align-items: flex-start; flex-direction: column; gap: 7px; padding: 9px 16px; }
-    .versioned-docc-metadata { justify-content: space-between; width: 100%; }
+    .versioned-docc-metadata { flex-wrap: wrap; gap: 8px 12px; justify-content: flex-start; width: 100%; }
+    .versioned-docc-star { margin-left: auto; }
   }
 </style>
 <header class="versioned-docc-header">
@@ -74,5 +89,6 @@
 __VERSIONED_DOCC_VERSION_OPTIONS__
       </select>
     </label>
+    __VERSIONED_DOCC_STAR_LINK__
   </div>
 </header>

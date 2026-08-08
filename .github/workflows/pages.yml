@@ -28,6 +28,11 @@ on:
         required: false
         default: false
         type: boolean
+      use-local-action:
+        description: Build with the action from the checked-out repository
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -53,7 +58,15 @@ jobs:
       - uses: oras-project/setup-oras@v1
       - name: Log in to GitHub Container Registry
         run: echo "${{ github.token }}" | oras login ghcr.io --username "${{ github.actor }}" --password-stdin
-      - uses: DocCLab/VersionedDocC@0.0.13
+      - name: Build with released VersionedDocC
+        if: ${{ !inputs.use-local-action }}
+        uses: DocCLab/VersionedDocC@0.0.14
+        with:
+          config: ${{ inputs.config }}
+          publish-oci-cache: ${{ inputs.publish-oci-cache }}
+      - name: Build with checked-out VersionedDocC
+        if: ${{ inputs.use-local-action }}
+        uses: ./
         with:
           config: ${{ inputs.config }}
           publish-oci-cache: ${{ inputs.publish-oci-cache }}

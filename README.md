@@ -15,6 +15,7 @@ and `docc` executables. It does not fork Swift-DocC or Swift-DocC Render.
 
 - Stable `/<project>/<version>/documentation/...` URLs.
 - A custom DocC header with version selection and UTC build date.
+- Optional GitHub edit and star actions plus a configurable VersionedDocC footer.
 - Adjacent-version API Changes generated from real public symbol graphs.
 - Optional adjacent-version article changes generated from stable DocC render content.
 - `-skip-protocol-implementations` to avoid inherited protocol-extension
@@ -61,7 +62,7 @@ Add `.vdc.json` to the package root:
 
 ```json
 {
-  "$schema": "https://raw.githubusercontent.com/DocCLab/VersionedDocC/0.0.13/Schema/VersionedDocC.schema.json",
+  "$schema": "https://raw.githubusercontent.com/DocCLab/VersionedDocC/0.0.14/Schema/VersionedDocC.schema.json",
   "schemaVersion": 1,
   "projectName": "ExampleKit",
   "moduleName": "ExampleKit",
@@ -76,6 +77,11 @@ Add `.vdc.json` to the package root:
     "development": { "name": "main", "ref": "HEAD" }
   },
   "sourceRepository": "https://github.com/Example/ExampleKit",
+  "siteUI": {
+    "showEdit": true,
+    "showStar": true,
+    "showPoweredBy": true
+  },
   "ociCache": {
     "repository": "ghcr.io/example/examplekit-docc-cache"
   },
@@ -102,6 +108,29 @@ Add `.vdc.json` to the package root:
 }
 ```
 
+### Site UI
+
+When `sourceRepository` is configured, VersionedDocC shows **Edit this page**
+and **Star on GitHub** by default. Edit links use each documentation version's
+`sourceRef`: authored articles and documentation extensions link to their
+Markdown source, while generated symbol pages link to the declaration reported
+by DocC. Pages without a reliable source mapping omit the edit action.
+
+Control these links and the footer explicitly with `siteUI`:
+
+```json
+"siteUI": {
+  "showEdit": false,
+  "showStar": true,
+  "showPoweredBy": true
+}
+```
+
+`showEdit` and `showStar` require `sourceRepository`. The
+**Powered by VersionedDocC** footer is enabled by default and is appended after
+an existing catalog `footer.html` instead of replacing it. Star and branding
+also appear on the Changes dashboard; Edit is limited to DocC content pages.
+
 For a repository that contains only a standalone DocC catalog, set
 `documentationOnly` and provide the catalog's stable documentation route with
 `modulePath`. `moduleName`, `targetName`, symbol graph settings, and API Changes
@@ -109,7 +138,7 @@ aren't used:
 
 ```json
 {
-  "$schema": "https://raw.githubusercontent.com/DocCLab/VersionedDocC/0.0.13/Schema/VersionedDocC.schema.json",
+  "$schema": "https://raw.githubusercontent.com/DocCLab/VersionedDocC/0.0.14/Schema/VersionedDocC.schema.json",
   "schemaVersion": 1,
   "documentationOnly": true,
   "projectName": "swift-book",
@@ -189,6 +218,9 @@ or an `xcrun --sdk` identifier such as `iphoneos` or `macosx`. Cross-platform
 Swift SDK bundles can instead be selected with `swiftSDK`, and each platform can
 append its own `buildArguments` array. Package deployment targets continue to
 come from the package manifest when the triple does not include an OS version.
+Each Swift build runs from the prepared version checkout with
+`VDC_GENERATE_DOCS=1`, allowing package manifests to select documentation-only
+build behavior without depending on Swift Package Index environment variables.
 
 If `symbolGraph.platforms` is omitted, VersionedDocC preserves its original
 single build on the current host platform. This backward-compatible default
@@ -252,7 +284,7 @@ Add VersionedDocC as a direct package dependency:
 ```swift
 .package(
     url: "https://github.com/DocCLab/VersionedDocC.git",
-    exact: "0.0.13"
+    exact: "0.0.14"
 )
 ```
 
@@ -343,7 +375,7 @@ history:
     fetch-depth: 0
 - uses: oras-project/setup-oras@v1
 - run: echo "${{ github.token }}" | oras login ghcr.io --username "${{ github.actor }}" --password-stdin
-- uses: DocCLab/VersionedDocC@0.0.13
+- uses: DocCLab/VersionedDocC@0.0.14
   with:
     config: .vdc.json
     publish-oci-cache: true
@@ -354,7 +386,7 @@ OpenSwiftUIProject repositories can alternatively use the reusable workflow:
 ```yaml
 jobs:
   documentation:
-    uses: DocCLab/VersionedDocC/.github/workflows/pages.yml@0.0.13
+    uses: DocCLab/VersionedDocC/.github/workflows/pages.yml@0.0.14
     with:
       config: .vdc.json
       artifact-path: .docs/build/versioned-site

@@ -24,3 +24,4 @@ jobs:
       config: .vdc.json
       artifact-path: .docs/build/versioned-site/VersionedDocC
       deploy: true
+      use-local-action: true

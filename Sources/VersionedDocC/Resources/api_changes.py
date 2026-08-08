@@ -37,6 +37,8 @@ def parse_arguments():
     parser.add_argument("--project-name", required=True)
     parser.add_argument("--module-path", required=True)
     parser.add_argument("--page-size", type=positive_integer, default=10)
+    parser.add_argument("--star-repository-url")
+    parser.add_argument("--powered-by-url")
     return parser.parse_args()
 
 
@@ -484,6 +486,23 @@ def render_dashboard(comparisons, arguments, sources=None):
         for source in sources
     )
     source_control_class = "source-control" + (" single-source" if len(sources) == 1 else "")
+    external_attributes = 'target="_blank" rel="noopener noreferrer"'
+    star_repository_url = getattr(arguments, "star_repository_url", None)
+    powered_by_url = getattr(arguments, "powered_by_url", None)
+    star_link = (
+        f'<a class="star-link" href="{html.escape(star_repository_url, quote=True)}" '
+        f'{external_attributes} aria-label="Star {html.escape(arguments.project_name)} on GitHub">'
+        '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 0C3.58 0 0 3.64 0 8.13c0 3.59 2.29 6.64 5.47 7.71.4.08.55-.18.55-.39 0-.19-.01-.83-.01-1.51-2.01.38-2.53-.5-2.69-.96-.09-.23-.48-.96-.82-1.15-.28-.15-.68-.52-.01-.53.63-.01 1.08.59 1.23.83.72 1.23 1.87.88 2.33.67.07-.53.28-.88.51-1.08-1.78-.21-3.64-.91-3.64-4.02 0-.89.31-1.62.82-2.19-.08-.2-.36-1.04.08-2.16 0 0 .67-.22 2.2.84A7.5 7.5 0 0 1 8 3.94a7.5 7.5 0 0 1 2 .27c1.53-1.06 2.2-.84 2.2-.84.44 1.12.16 1.96.08 2.16.51.57.82 1.3.82 2.19 0 3.12-1.87 3.81-3.65 4.02.29.25.54.74.54 1.5 0 1.08-.01 1.95-.01 2.22 0 .22.15.48.55.39A8.14 8.14 0 0 0 16 8.13C16 3.64 12.42 0 8 0Z"/></svg>'
+        '<span>Star on GitHub</span></a>'
+        if star_repository_url
+        else ""
+    )
+    powered_by = (
+        f'<footer class="site-footer"><a href="{html.escape(powered_by_url, quote=True)}" '
+        f'{external_attributes}>Powered by VersionedDocC</a></footer>'
+        if powered_by_url
+        else ""
+    )
     return f"""<!doctype html>
 <html lang="en">
 <head>
@@ -494,7 +513,7 @@ def render_dashboard(comparisons, arguments, sources=None):
     :root {{ color-scheme: light dark; --page:#fff; --surface:#f5f5f7; --line:#d2d2d7; --text:#1d1d1f; --secondary:#6e6e73; --link:#06c; --added:#248a3d; --modified:#b65d00; --removed:#c72535; }}
     * {{ box-sizing:border-box; }} body {{ background:var(--page); color:var(--text); font:15px/1.5 -apple-system,BlinkMacSystemFont,"SF Pro Text",sans-serif; margin:0; }} a {{ color:var(--link); }}
     .site-header {{ align-items:center; border-bottom:1px solid var(--line); display:flex; justify-content:space-between; min-height:52px; padding:8px max(24px,calc((100vw - 980px)/2)); }}
-    .brand {{ color:inherit; font-weight:650; text-decoration:none; }} .brand span,.header-meta,.eyebrow,.comparison-note,.symbol-path,.availability {{ color:var(--secondary); }} .brand span {{ font-weight:400; margin-left:7px; }} .header-meta,.eyebrow,.symbol-path,.availability {{ font-size:12px; }}
+    .brand {{ color:inherit; font-weight:650; text-decoration:none; }} .brand span,.header-meta,.eyebrow,.comparison-note,.symbol-path,.availability {{ color:var(--secondary); }} .brand span {{ font-weight:400; margin-left:7px; }} .header-actions,.star-link {{ align-items:center; display:flex; }} .header-actions {{ gap:12px; }} .star-link {{ border:1px solid var(--line); border-radius:6px; color:var(--text); font-size:12px; font-weight:500; gap:5px; padding:4px 8px; text-decoration:none; }} .star-link:hover {{ background:var(--surface); }} .star-link svg {{ fill:currentColor; height:14px; width:14px; }} .header-meta,.eyebrow,.symbol-path,.availability {{ font-size:12px; }}
     main {{ margin:0 auto; max-width:980px; padding:54px 24px 80px; }} .intro {{ background:var(--surface); border-radius:10px; color:var(--secondary); margin:0 0 32px; padding:13px 16px; }}
     .controls,.comparison-heading {{ align-items:end; display:flex; gap:16px; justify-content:space-between; }} .controls {{ border-bottom:1px solid var(--line); margin-bottom:36px; padding-bottom:24px; }} .control-group {{ display:flex; gap:12px; }} label {{ color:var(--secondary); display:grid; font-size:12px; gap:5px; }} .single-source {{ display:none; }} select,input {{ background:var(--page); border:1px solid var(--line); border-radius:7px; color:var(--text); font:inherit; min-height:36px; padding:5px 10px; }} input {{ min-width:240px; }}
     .eyebrow {{ font-weight:600; letter-spacing:.06em; margin:0 0 4px; text-transform:uppercase; }} h1 {{ font-size:34px; letter-spacing:-.025em; margin:0; }} h1 span {{ color:var(--secondary); font-weight:400; }}
@@ -502,14 +521,15 @@ def render_dashboard(comparisons, arguments, sources=None):
     .result-bar,.pager {{ align-items:center; display:flex; justify-content:space-between; }} .result-bar {{ color:var(--secondary); margin:0 0 12px; }} .pager {{ gap:8px; }} button {{ background:var(--page); border:1px solid var(--line); border-radius:7px; color:var(--text); font:inherit; padding:7px 12px; }} button:disabled {{ opacity:.45; }}
     .changes-list {{ display:grid; gap:16px; }} .change-card {{ border:1px solid var(--line); border-left:4px solid; border-radius:10px; padding:18px 20px; }} .change-card.added {{ border-left-color:var(--added); }} .change-card.modified {{ border-left-color:var(--modified); }} .change-card.removed {{ border-left-color:var(--removed); }}
     .badge {{ border-radius:999px; color:#fff; font-size:11px; font-weight:650; padding:2px 8px; }} .added .badge {{ background:var(--added); }} .modified .badge {{ background:var(--modified); }} .removed .badge {{ background:var(--removed); }} .kind {{ color:var(--secondary); font-size:12px; margin-left:8px; }} h2 {{ font-size:19px; margin:10px 0 0; }} h2 a {{ color:inherit; text-decoration:none; }} .symbol-path,.availability {{ margin:2px 0; }} .symbol-path {{ font-family:ui-monospace,"SF Mono",monospace; }}
-    .declaration {{ background:var(--surface); border-radius:8px; display:grid; gap:5px; margin-top:13px; padding:11px 13px; }} .declaration span {{ color:var(--secondary); font-size:11px; font-weight:600; text-transform:uppercase; }} code {{ font:13px/1.45 ui-monospace,"SF Mono",Menlo,monospace; white-space:pre-wrap; }} .article-diff {{ background:var(--surface); border-radius:8px; font:12px/1.5 ui-monospace,"SF Mono",Menlo,monospace; margin:13px 0 0; max-height:430px; overflow:auto; padding:11px 13px; white-space:pre-wrap; }} .article-diff span {{ display:block; }} .diff-added {{ color:var(--added); }} .diff-removed {{ color:var(--removed); }} .diff-range,.diff-file {{ color:var(--secondary); }} .truncated {{ color:var(--secondary); font-size:12px; margin:7px 0 0; }} footer {{ margin-top:13px; }}
+    .declaration {{ background:var(--surface); border-radius:8px; display:grid; gap:5px; margin-top:13px; padding:11px 13px; }} .declaration span {{ color:var(--secondary); font-size:11px; font-weight:600; text-transform:uppercase; }} code {{ font:13px/1.45 ui-monospace,"SF Mono",Menlo,monospace; white-space:pre-wrap; }} .article-diff {{ background:var(--surface); border-radius:8px; font:12px/1.5 ui-monospace,"SF Mono",Menlo,monospace; margin:13px 0 0; max-height:430px; overflow:auto; padding:11px 13px; white-space:pre-wrap; }} .article-diff span {{ display:block; }} .diff-added {{ color:var(--added); }} .diff-removed {{ color:var(--removed); }} .diff-range,.diff-file {{ color:var(--secondary); }} .truncated {{ color:var(--secondary); font-size:12px; margin:7px 0 0; }} .change-card footer {{ margin-top:13px; }}
     .empty {{ color:var(--secondary); padding:36px 0; }}
+    .site-footer {{ border-top:1px solid var(--line); color:var(--secondary); font-size:12px; padding:18px max(24px,calc((100vw - 980px)/2)); text-align:right; }} .site-footer a {{ color:inherit; text-decoration:none; }} .site-footer a:hover {{ text-decoration:underline; }}
     @media(prefers-color-scheme:dark) {{ :root {{ --page:#1d1d1f; --surface:#2c2c2e; --line:#48484a; --text:#f5f5f7; --secondary:#a1a1a6; --link:#2997ff; --added:#52b563; --modified:#ff9f45; --removed:#ff696f; }} }}
-    @media(max-width:680px) {{ main {{ padding:32px 16px 56px; }} .controls,.comparison-heading {{ align-items:stretch; flex-direction:column; }} .control-group {{ display:grid; grid-template-columns:1fr 1fr; }} input {{ min-width:0; }} }}
+    @media(max-width:680px) {{ main {{ padding:32px 16px 56px; }} .controls,.comparison-heading {{ align-items:stretch; flex-direction:column; }} .control-group {{ display:grid; grid-template-columns:1fr 1fr; }} input {{ min-width:0; }} .site-header {{ align-items:flex-start; flex-direction:column; gap:8px; padding:10px 16px; }} .site-footer {{ padding:16px; text-align:left; }} }}
   </style>
 </head>
 <body>
-  <header class="site-header"><a class="brand" href="{html.escape(docs_home)}">{html.escape(arguments.project_name)} <span>Documentation</span></a><span class="header-meta">Built {html.escape(arguments.build_date)}</span></header>
+  <header class="site-header"><a class="brand" href="{html.escape(docs_home)}">{html.escape(arguments.project_name)} <span>Documentation</span></a><div class="header-actions"><span class="header-meta">Built {html.escape(arguments.build_date)}</span>{star_link}</div></header>
   <main>
     <p class="intro">{html.escape(introduction)}</p>
     <div class="controls"><div><p class="eyebrow">Documentation</p><strong>{changes_title}</strong></div><div class="control-group">
@@ -522,6 +542,7 @@ def render_dashboard(comparisons, arguments, sources=None):
     <div class="summary-grid"><div class="summary added"><strong id="added"></strong><span>Added</span></div><div class="summary modified"><strong id="modified"></strong><span>Modified</span></div><div class="summary removed"><strong id="removed"></strong><span>Removed</span></div></div>
     <div class="result-bar"><span id="result-count"></span><div class="pager"><button id="previous">Previous</button><button id="next">Next</button></div></div><div id="changes" class="changes-list"></div><p id="empty" class="empty" hidden>No changes match this filter.</p></section>
   </main>
+  {powered_by}
   <script>
     const DATA={data}; const BASE={json.dumps(base)}; const PAGE_SIZE={arguments.page_size}; let page=0;
     const compare=document.getElementById('compare'), sourceFilter=document.getElementById('source'), filter=document.getElementById('filter'), search=document.getElementById('search'), list=document.getElementById('changes');
