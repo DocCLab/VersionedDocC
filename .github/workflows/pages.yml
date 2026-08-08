@@ -60,7 +60,7 @@ jobs:
         run: echo "${{ github.token }}" | oras login ghcr.io --username "${{ github.actor }}" --password-stdin
       - name: Build with released VersionedDocC
         if: ${{ !inputs.use-local-action }}
-        uses: DocCLab/VersionedDocC@0.0.14
+        uses: DocCLab/VersionedDocC@0.0.15
         with:
           config: ${{ inputs.config }}
           publish-oci-cache: ${{ inputs.publish-oci-cache }}
