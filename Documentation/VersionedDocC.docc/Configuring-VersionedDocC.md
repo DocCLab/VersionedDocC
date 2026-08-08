@@ -90,6 +90,36 @@ Choose the platform that represents most consumers as `defaultPlatform`.
 VersionedDocC uses its declaration as the primary representation when the same
 symbol appears in more than one graph.
 
+## Merge modules built by existing CI jobs
+
+Use `additionalModules` for products whose symbol graphs must be emitted on a
+different runner, such as macOS, Linux, iOS, and Windows backends:
+
+```json
+"additionalModules": [
+  {
+    "moduleName": "AppKitBackend",
+    "symbolGraphPath": ".docs/symbol-graphs/{version}/AppKitBackend"
+  },
+  {
+    "moduleName": "UIKitBackend",
+    "symbolGraphPath": ".docs/symbol-graphs/{version}/UIKitBackend"
+  }
+]
+```
+
+The path may point to one `.symbols.json` file or a directory. It supports the
+`{version}`, `{ref}`, `{commit}`, and `{module}` placeholders. Download and
+extract the artifacts before running VersionedDocC; the tool validates the
+module, remaps CI checkout locations, converts each module, and merges the
+archives into one versioned site.
+
+Set `catalogPath` on a module when it has authored documentation. Without one,
+VersionedDocC supplies an empty catalog. Set `versions` to an array of published
+version names only when the module is intentionally unavailable elsewhere.
+Otherwise an external graph input is required for every version. All imported
+module graphs participate in adjacent-version API Changes.
+
 ## Publish a standalone catalog
 
 A documentation repository without `Package.swift` can skip symbol graphs:

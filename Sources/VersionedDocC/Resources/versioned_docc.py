@@ -19,12 +19,12 @@ from pathlib import Path
 from urllib.parse import quote, unquote, urlsplit
 
 
-VERSION = "0.0.14"
+VERSION = "0.0.15-test"
 DEFAULT_CONFIG = ".vdc.json"
 # Keep this stable across releases that only change assembly, routing, or the
 # command interface. Bump it only when the per-version DocC cache contents must
 # be regenerated. Its initial value preserves 0.0.1 cache fingerprints.
-BUILD_CACHE_REVISION = "0.0.2"
+BUILD_CACHE_REVISION = "0.0.3"
 SEMVER = re.compile(r"^v?(\d+)\.(\d+)\.(\d+)(?:[-+].*)?$")
 LATEST_RELEASE_STRATEGIES = {"majorMinor", "semanticVersion", "tagDate"}
 OPTIONS_TOKEN = "__VERSIONED_DOCC_VERSION_OPTIONS__"
@@ -162,10 +162,66 @@ def load_config(package_root, config_path):
     config.setdefault("doccArguments", ["--emit-digest"])
     config.setdefault("environment", {})
     config.setdefault("localDependencies", {})
+    additional_modules = config.setdefault("additionalModules", [])
+    if not isinstance(additional_modules, list):
+        raise VersionedDocCError("additionalModules must be an array")
+    if documentation_only and additional_modules:
+        raise VersionedDocCError(
+            "additionalModules cannot be used with documentationOnly"
+        )
+    module_names = {config.get("moduleName", "").casefold()}
+    module_paths = {config["modulePath"].casefold()}
+    for index, module in enumerate(additional_modules):
+        label = f"additionalModules[{index}]"
+        if not isinstance(module, dict):
+            raise VersionedDocCError(f"{label} must be an object")
+        module_name = module.get("moduleName")
+        symbol_graph_path = module.get("symbolGraphPath")
+        if not isinstance(module_name, str) or not module_name:
+            raise VersionedDocCError(f"{label}.moduleName is required")
+        if not isinstance(symbol_graph_path, str) or not symbol_graph_path:
+            raise VersionedDocCError(f"{label}.symbolGraphPath is required")
+        module_path = module.setdefault("modulePath", module_name.lower())
+        if not isinstance(module_path, str) or not module_path:
+            raise VersionedDocCError(f"{label}.modulePath must be a non-empty string")
+        catalog_path = module.get("catalogPath")
+        if catalog_path is not None and (
+            not isinstance(catalog_path, str) or not catalog_path
+        ):
+            raise VersionedDocCError(f"{label}.catalogPath must be a non-empty string")
+        versions = module.get("versions")
+        if versions is not None and (
+            not isinstance(versions, list)
+            or not versions
+            or not all(isinstance(item, str) and item for item in versions)
+        ):
+            raise VersionedDocCError(
+                f"{label}.versions must be a non-empty array of strings"
+            )
+        if module_name.casefold() in module_names:
+            raise VersionedDocCError(f"duplicate moduleName: {module_name}")
+        if module_path.casefold() in module_paths:
+            raise VersionedDocCError(f"duplicate modulePath: {module_path}")
+        module_names.add(module_name.casefold())
+        module_paths.add(module_path.casefold())
     config.setdefault(
         "allowedModules",
-        [config["modulePath"] if documentation_only else config["moduleName"]],
+        (
+            [config["modulePath"]]
+            if documentation_only
+            else [
+                config["moduleName"],
+                *[module["moduleName"] for module in additional_modules],
+            ]
+        ),
     )
+    allowed_module_names = {
+        module.casefold() for module in config["allowedModules"]
+    }
+    for module in additional_modules:
+        if module["moduleName"].casefold() not in allowed_module_names:
+            config["allowedModules"].append(module["moduleName"])
+            allowed_module_names.add(module["moduleName"].casefold())
     historical_catalog_fallback = config.get("historicalCatalogFallback")
     if historical_catalog_fallback not in (None, "current"):
         raise VersionedDocCError(
@@ -274,6 +330,45 @@ def load_config(package_root, config_path):
         oci_cache.setdefault("pull", True)
         oci_cache.setdefault("includeDevelopment", False)
     return config, path
+
+
+def modules_for_version(config, version):
+    modules = [
+        {
+            "moduleName": config["moduleName"],
+            "modulePath": config["modulePath"],
+            "targetName": config["targetName"],
+            "catalogPath": version.get("catalogPath", config["catalogPath"]),
+            "primary": True,
+        }
+    ]
+    for module in config["additionalModules"]:
+        if module.get("versions") and version["name"] not in module["versions"]:
+            continue
+        modules.append({**module, "primary": False})
+    return modules
+
+
+def configured_module_names(config, version=None):
+    if config["documentationOnly"]:
+        return []
+    if version is not None:
+        return [module["moduleName"] for module in modules_for_version(config, version)]
+    return [
+        config["moduleName"],
+        *[module["moduleName"] for module in config["additionalModules"]],
+    ]
+
+
+def configured_module_paths(config, version=None):
+    if config["documentationOnly"]:
+        return [config["modulePath"]]
+    if version is not None:
+        return [module["modulePath"] for module in modules_for_version(config, version)]
+    return [
+        config["modulePath"],
+        *[module["modulePath"] for module in config["additionalModules"]],
+    ]
 
 
 def platform_slug(value):
@@ -770,6 +865,7 @@ def inject_edit_metadata(
     config,
     version,
     edit_reference,
+    authored_archive_identifier=None,
 ):
     if not site_ui_value(config, "showEdit"):
         return 0
@@ -794,6 +890,13 @@ def inject_edit_metadata(
         identifier_component = identifier.rsplit("/", 1)[-1]
         candidate = candidates.get(edit_source_key(identifier_component))
         if candidate is False:
+            candidate = None
+        if (
+            candidate is not None
+            and authored_archive_identifier is not None
+            and urlsplit(identifier).netloc.casefold()
+            != authored_archive_identifier.casefold()
+        ):
             candidate = None
         if (
             candidate is None
@@ -856,6 +959,7 @@ def build_fingerprint(config, docc_binary, header_template, footer_template=""):
         "doccArguments": config["doccArguments"],
         "symbolGraph": config["symbolGraph"],
         "allowedModules": config["allowedModules"],
+        "additionalModules": config.get("additionalModules", []),
         "historicalCatalogFallback": config.get("historicalCatalogFallback"),
     }
     if article_changes_enabled(config):
@@ -882,14 +986,19 @@ def version_cache_fingerprint(build_fingerprint, config, version):
 def cache_valid(cache_entry, commit, fingerprint, module_name=None):
     metadata_path = cache_entry / "metadata.json"
     site_path = cache_entry / "site" / "index.html"
-    graph_paths = (
-        module_symbol_graph_paths(cache_entry / "symbols", module_name)
-        if module_name
-        else []
+    module_names = (
+        [module_name]
+        if isinstance(module_name, str)
+        else list(module_name or [])
     )
+    missing_graphs = [
+        name
+        for name in module_names
+        if not module_symbol_graph_paths(cache_entry / "symbols", name)
+    ]
     if (
         not metadata_path.is_file()
-        or (module_name and not graph_paths)
+        or missing_graphs
         or not site_path.is_file()
     ):
         return False
@@ -1068,7 +1177,12 @@ def restore_oci_cache(
         if not archive_path.is_file():
             raise VersionedDocCError(f"OCI cache has no {OCI_ARCHIVE_NAME}: {reference}")
         extract_cache_archive(archive_path, staging)
-        if not cache_valid(staging, commit, fingerprint, config.get("moduleName")):
+        if not cache_valid(
+            staging,
+            commit,
+            fingerprint,
+            configured_module_names(config, version),
+        ):
             raise VersionedDocCError(f"OCI cache metadata mismatch: {reference}")
         cache_entry = cache_root / version["name"]
         remove_tree(cache_entry, cache_root, "version cache")
@@ -1215,6 +1329,104 @@ def build_symbol_graphs(source_root, config, version, graph_root, logs_root):
     return platforms
 
 
+def external_symbol_graph_path(package_root, module, version, commit):
+    values = {
+        "version": version["name"],
+        "ref": version["ref"],
+        "commit": commit,
+        "module": module["moduleName"],
+    }
+    try:
+        configured = module["symbolGraphPath"].format_map(values)
+    except KeyError as error:
+        raise VersionedDocCError(
+            f"unknown symbolGraphPath placeholder for {module['moduleName']}: {error.args[0]}"
+        ) from error
+    return resolve_path(package_root, configured)
+
+
+def rewrite_symbol_graph_locations(graph_path, source_root):
+    with graph_path.open(encoding="utf-8") as source:
+        graph = json.load(source)
+    rewritten = 0
+    for symbol in graph.get("symbols", []):
+        location = symbol.get("location")
+        if not isinstance(location, dict):
+            continue
+        uri = location.get("uri")
+        if not isinstance(uri, str) or not uri.startswith("file://"):
+            continue
+        original = Path(unquote(urlsplit(uri).path))
+        if original.is_file() and source_root.resolve() in original.resolve().parents:
+            continue
+        parts = original.parts
+        replacement = None
+        for marker in ("Sources", "Tests", "Plugins"):
+            indexes = [index for index, part in enumerate(parts) if part == marker]
+            for index in reversed(indexes):
+                candidate = source_root.joinpath(*parts[index:])
+                if candidate.is_file():
+                    replacement = candidate.resolve().as_uri()
+                    break
+            if replacement:
+                break
+        if replacement:
+            location["uri"] = replacement
+            rewritten += 1
+    if rewritten:
+        graph_path.write_text(
+            json.dumps(graph, separators=(",", ":")) + "\n",
+            encoding="utf-8",
+        )
+    return rewritten
+
+
+def import_symbol_graphs(
+    package_root,
+    source_root,
+    module,
+    version,
+    commit,
+    destination,
+    allowed_modules,
+):
+    source_path = external_symbol_graph_path(package_root, module, version, commit)
+    if source_path.is_file():
+        candidates = [source_path]
+    elif source_path.is_dir():
+        candidates = sorted(source_path.rglob("*.symbols.json"))
+    else:
+        raise VersionedDocCError(
+            f"missing external symbol graphs for {module['moduleName']}: {source_path}"
+        )
+    destination.mkdir(parents=True, exist_ok=True)
+    copied = []
+    for candidate in candidates:
+        with candidate.open(encoding="utf-8") as source:
+            graph = json.load(source)
+        if graph.get("module", {}).get("name") != module["moduleName"]:
+            continue
+        output = destination / candidate.name
+        if output.exists():
+            raise VersionedDocCError(
+                f"duplicate external symbol graph filename for {module['moduleName']}: {candidate.name}"
+            )
+        shutil.copy2(candidate, output)
+        filter_symbol_graph(output, allowed_modules)
+        rewrite_symbol_graph_locations(output, source_root)
+        copied.append(output)
+    if not copied:
+        raise VersionedDocCError(
+            f"no external symbol graphs for module {module['moduleName']} under {source_path}"
+        )
+    retain_symbol_graph_module(destination, module["moduleName"])
+    print(
+        f"{version['name']}: imported {len(copied)} symbol graph(s) for "
+        f"{module['moduleName']} from {source_path}"
+    )
+    return copied
+
+
 def build_version(
     package_root,
     config,
@@ -1236,84 +1448,186 @@ def build_version(
     (staging / "catalog").mkdir()
     print(f"Building {version['name']} ({commit[:8]})")
     platforms = []
+    catalog_fallback_source_commit = None
+    configured_catalog_path = version.get("catalogPath", config["catalogPath"])
     try:
         with PreparedSource(package_root, config, version, commit) as source_root:
             graph_root = staging / "symbols"
-            if not config["documentationOnly"]:
-                platforms = build_symbol_graphs(
-                    source_root, config, version, graph_root, logs_root
-                )
-
-            configured_catalog_path = version.get(
-                "catalogPath", config["catalogPath"]
-            )
-            source_catalog = source_root / configured_catalog_path
-            catalog_fallback_source_commit = None
-            edit_catalog_path = configured_catalog_path
-            edit_reference = source_reference(config, version)
-            if not source_catalog.is_dir():
-                fallback_catalog = package_root / config["catalogPath"]
-                if (
-                    config.get("historicalCatalogFallback") == "current"
-                    and fallback_catalog.is_dir()
-                    and fallback_catalog.resolve() != source_catalog.resolve()
-                ):
-                    source_catalog = fallback_catalog
-                    catalog_fallback_source_commit = git(
-                        package_root, "rev-parse", "HEAD"
-                    )
-                    edit_catalog_path = config["catalogPath"]
-                    edit_reference = catalog_fallback_source_commit
-                    print(
-                        f"{version['name']}: using current DocC catalog "
-                        f"({catalog_fallback_source_commit[:8]})"
-                    )
-                else:
-                    raise VersionedDocCError(
-                        f"missing DocC catalog: {source_catalog}"
-                    )
-            catalog = staging / "catalog" / source_catalog.name
-            shutil.copytree(source_catalog, catalog)
-            (catalog / "header.html").write_text(
-                render_header(header_template, config, version["name"], build_date),
-                encoding="utf-8",
-            )
-            rendered_footer = render_footer(footer_template, config, version["name"])
-            append_custom_footer(catalog, rendered_footer)
-            docc = [
-                *docc_command,
-                "convert",
-                str(catalog),
-            ]
-            if not config["documentationOnly"]:
-                docc.extend(
-                    ["--additional-symbol-graph-dir", str(graph_root)]
-                )
-            docc.extend(
-                [
-                    "--transform-for-static-hosting",
-                    "--output-path",
-                    str(staging / "site"),
-                    "--hosting-base-path",
-                    f"{config['hostingBasePath']}/{version['name']}",
-                    "--default-code-listing-language",
-                    "swift",
-                    "--experimental-enable-custom-templates",
-                    *config["doccArguments"],
+            if config["documentationOnly"]:
+                modules = [
+                    {
+                        "moduleName": None,
+                        "modulePath": config["modulePath"],
+                        "catalogPath": configured_catalog_path,
+                        "primary": True,
+                    }
                 ]
-            )
-            docc.extend(source_service_arguments(config, version, source_root))
-            run(docc, log_path=logs_root / f"{version['name']}-docc.log")
+            else:
+                modules = modules_for_version(config, version)
+            module_graph_roots = {}
+            if not config["documentationOnly"]:
+                primary_graph_root = (
+                    graph_root
+                    if len(modules) == 1
+                    else graph_root / f"00-{platform_slug(config['moduleName'])}"
+                )
+                platforms = build_symbol_graphs(
+                    source_root, config, version, primary_graph_root, logs_root
+                )
+                module_graph_roots[config["moduleName"]] = primary_graph_root
+                for index, module in enumerate(modules[1:], 1):
+                    module_graph_root = (
+                        graph_root
+                        / f"{index:02d}-{platform_slug(module['moduleName'])}"
+                    )
+                    import_symbol_graphs(
+                        package_root,
+                        source_root,
+                        module,
+                        version,
+                        commit,
+                        module_graph_root,
+                        set(config["allowedModules"]),
+                    )
+                    module_graph_roots[module["moduleName"]] = module_graph_root
+
+            prepared_catalogs = []
+            archives = []
+            archives_root = staging / "archives"
+            if len(modules) > 1:
+                archives_root.mkdir()
+            for index, module in enumerate(modules):
+                module_name = module.get("moduleName")
+                module_catalog_path = module.get("catalogPath")
+                edit_catalog_path = module_catalog_path or ""
+                edit_reference = source_reference(config, version)
+                source_catalog = (
+                    source_root / module_catalog_path
+                    if module_catalog_path
+                    else None
+                )
+                if source_catalog is not None and not source_catalog.is_dir():
+                    if not module["primary"]:
+                        raise VersionedDocCError(
+                            f"missing DocC catalog for {module_name}: {source_catalog}"
+                        )
+                    fallback_catalog = package_root / config["catalogPath"]
+                    if (
+                        config.get("historicalCatalogFallback") == "current"
+                        and fallback_catalog.is_dir()
+                        and fallback_catalog.resolve() != source_catalog.resolve()
+                    ):
+                        source_catalog = fallback_catalog
+                        catalog_fallback_source_commit = git(
+                            package_root, "rev-parse", "HEAD"
+                        )
+                        edit_catalog_path = config["catalogPath"]
+                        edit_reference = catalog_fallback_source_commit
+                        print(
+                            f"{version['name']}: using current DocC catalog "
+                            f"({catalog_fallback_source_commit[:8]})"
+                        )
+                    else:
+                        raise VersionedDocCError(
+                            f"missing DocC catalog: {source_catalog}"
+                        )
+                catalog_name = (
+                    source_catalog.name
+                    if source_catalog is not None
+                    else f"{module_name}.docc"
+                )
+                archived_catalog_name = (
+                    catalog_name
+                    if len(modules) == 1
+                    else f"{index:02d}-{catalog_name}"
+                )
+                catalog = staging / "catalog" / archived_catalog_name
+                if source_catalog is None:
+                    catalog.mkdir()
+                else:
+                    shutil.copytree(source_catalog, catalog)
+                (catalog / "header.html").write_text(
+                    render_header(
+                        header_template, config, version["name"], build_date
+                    ),
+                    encoding="utf-8",
+                )
+                append_custom_footer(
+                    catalog,
+                    render_footer(footer_template, config, version["name"]),
+                )
+                output = (
+                    staging / "site"
+                    if len(modules) == 1
+                    else archives_root
+                    / f"{index:02d}-{platform_slug(module_name)}.doccarchive"
+                )
+                docc = [*docc_command, "convert", str(catalog)]
+                if module_name is not None:
+                    docc.extend(
+                        [
+                            "--additional-symbol-graph-dir",
+                            str(module_graph_roots[module_name]),
+                        ]
+                    )
+                docc.extend(
+                    [
+                        "--transform-for-static-hosting",
+                        "--output-path",
+                        str(output),
+                        "--hosting-base-path",
+                        f"{config['hostingBasePath']}/{version['name']}",
+                        "--default-code-listing-language",
+                        "swift",
+                        "--experimental-enable-custom-templates",
+                        *config["doccArguments"],
+                    ]
+                )
+                docc.extend(source_service_arguments(config, version, source_root))
+                log_module = platform_slug(module_name or config["modulePath"])
+                run(
+                    docc,
+                    log_path=logs_root
+                    / f"{version['name']}-{log_module}-docc.log",
+                )
+                if source_catalog is not None:
+                    prepared_catalogs.append(
+                        (
+                            catalog,
+                            edit_catalog_path,
+                            edit_reference,
+                            Path(archived_catalog_name).stem,
+                        )
+                    )
+                archives.append(output)
+            if len(archives) > 1:
+                run(
+                    [
+                        *docc_command,
+                        "merge",
+                        *map(str, archives),
+                        "--output-path",
+                        str(staging / "site"),
+                    ],
+                    log_path=logs_root / f"{version['name']}-docc-merge.log",
+                )
             if not (staging / "site" / "index.html").is_file():
                 raise VersionedDocCError(f"DocC emitted no index for {version['name']}")
-            inject_edit_metadata(
-                staging / "site",
+            for (
                 catalog,
                 edit_catalog_path,
-                config,
-                version,
                 edit_reference,
-            )
+                archive_identifier,
+            ) in prepared_catalogs:
+                inject_edit_metadata(
+                    staging / "site",
+                    catalog,
+                    edit_catalog_path,
+                    config,
+                    version,
+                    edit_reference,
+                    archive_identifier,
+                )
             theme_settings = staging / "site" / "theme-settings.json"
             if not theme_settings.exists():
                 theme_settings.write_text("{}\n", encoding="utf-8")
@@ -1322,6 +1636,7 @@ def build_version(
         raise
 
     remove_tree(staging / "catalog", staging, "temporary catalog")
+    remove_tree(staging / "archives", staging, "temporary DocC archives")
     metadata = {
         "schemaVersion": 1,
         "generatorVersion": VERSION,
@@ -1331,6 +1646,7 @@ def build_version(
         "catalogPath": configured_catalog_path,
         "buildDate": build_date,
         "buildFingerprint": fingerprint,
+        "modules": configured_module_names(config, version),
         "platforms": (
             []
             if config["documentationOnly"]
@@ -1433,12 +1749,21 @@ def prune_site_to_module(site_root, module_path, allowed_module_paths=()):
         }
         languages = index.get("interfaceLanguages", {})
         for language, modules in languages.items():
-            languages[language] = [
-                module
-                for module in modules
-                if module.get("path", "").rstrip("/").casefold()
-                in expected_paths
-            ]
+            retained = []
+            for module in modules:
+                path = module.get("path", "").rstrip("/").casefold()
+                if path == "/documentation":
+                    module["children"] = [
+                        child
+                        for child in module.get("children", [])
+                        if child.get("path", "").rstrip("/").casefold()
+                        in expected_paths
+                    ]
+                    if module["children"]:
+                        retained.append(module)
+                elif path in expected_paths:
+                    retained.append(module)
+            languages[language] = retained
         write_json(index_path, index)
 
     indexing_records_path = site_root / "indexing-records.json"
@@ -1564,7 +1889,7 @@ def assemble(package_root, config, versions, cache_root, output_path, build_date
         prune_site_to_module(
             version_output,
             config["modulePath"],
-            config["allowedModules"],
+            [*config["allowedModules"], *configured_module_paths(config, version)],
         )
         finalize_site(version_output, versions, version["name"])
     (output_path / "versions.json").write_text(
@@ -1607,17 +1932,18 @@ def assemble(package_root, config, versions, cache_root, output_path, build_date
         )
     for version in versions:
         if not config["documentationOnly"]:
-            graph_paths = module_symbol_graph_paths(
-                cache_root / version["name"] / "symbols", config["moduleName"]
-            )
-            if not graph_paths:
-                raise VersionedDocCError(
-                    f"missing symbol graphs for {version['name']} ({config['moduleName']})"
+            for module_name in configured_module_names(config, version):
+                graph_paths = module_symbol_graph_paths(
+                    cache_root / version["name"] / "symbols", module_name
                 )
-            for graph_path in graph_paths:
-                api_command.extend(
-                    ["--symbol-graph", f"{version['name']}={graph_path}"]
-                )
+                if not graph_paths:
+                    raise VersionedDocCError(
+                        f"missing symbol graphs for {version['name']} ({module_name})"
+                    )
+                for graph_path in graph_paths:
+                    api_command.extend(
+                        ["--symbol-graph", f"{version['name']}={graph_path}"]
+                    )
         if config["articleChanges"]["enabled"]:
             api_command.extend(
                 [
@@ -1676,7 +2002,10 @@ def build_command(arguments):
         commit = git(package_root, "rev-parse", f"{version['ref']}^{{commit}}")
         cache_entry = cache_root / version["name"]
         cache_hit = not arguments.rebuild and cache_valid(
-            cache_entry, commit, fingerprint, config.get("moduleName")
+            cache_entry,
+            commit,
+            fingerprint,
+            configured_module_names(config, version),
         )
         uses_remote = (
             oci_cache

@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://raw.githubusercontent.com/DocCLab/VersionedDocC/0.0.14/Schema/VersionedDocC.schema.json",
+  "$id": "https://raw.githubusercontent.com/DocCLab/VersionedDocC/0.0.15-test/Schema/VersionedDocC.schema.json",
   "title": "VersionedDocC configuration",
   "type": "object",
   "required": [
@@ -21,6 +21,32 @@
     "modulePath": { "type": "string", "minLength": 1 },
     "targetName": { "type": "string", "minLength": 1 },
     "catalogPath": { "type": "string", "minLength": 1 },
+    "additionalModules": {
+      "type": "array",
+      "description": "Additional modules converted from externally produced symbol graphs and merged into each version's DocC archive.",
+      "items": {
+        "type": "object",
+        "required": ["moduleName", "symbolGraphPath"],
+        "properties": {
+          "moduleName": { "type": "string", "minLength": 1 },
+          "modulePath": { "type": "string", "minLength": 1 },
+          "symbolGraphPath": {
+            "type": "string",
+            "minLength": 1,
+            "description": "File or directory containing symbol graphs. Supports {version}, {ref}, {commit}, and {module} placeholders."
+          },
+          "catalogPath": { "type": "string", "minLength": 1 },
+          "versions": {
+            "type": "array",
+            "minItems": 1,
+            "uniqueItems": true,
+            "items": { "type": "string", "minLength": 1 }
+          }
+        },
+        "additionalProperties": false
+      },
+      "default": []
+    },
     "hostingBasePath": { "type": "string", "pattern": "^/[A-Za-z0-9._/-]+$" },
     "defaultVersion": { "type": "string", "default": "main" },
     "outputPath": { "type": "string" },
@@ -159,7 +185,10 @@
         "required": ["documentationOnly"],
         "properties": { "documentationOnly": { "const": true } }
       },
-      "then": { "required": ["modulePath"] },
+      "then": {
+        "required": ["modulePath"],
+        "properties": { "additionalModules": { "maxItems": 0 } }
+      },
       "else": { "required": ["moduleName", "targetName"] }
     },
     {

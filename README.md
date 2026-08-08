@@ -228,6 +228,45 @@ also avoids invalidating existing single-platform release caches. Adding or
 changing platform configuration is part of the immutable cache fingerprint, so
 the affected version caches are rebuilt once.
 
+### External symbol graphs and additional modules
+
+Use `additionalModules` when some products must be compiled by existing
+platform-specific CI jobs. VersionedDocC imports their symbol graphs, converts
+each module independently, and merges the DocC archives for that version:
+
+```json
+"additionalModules": [
+  {
+    "moduleName": "AppKitBackend",
+    "symbolGraphPath": ".docs/symbol-graphs/{version}/AppKitBackend"
+  },
+  {
+    "moduleName": "UIKitBackend",
+    "modulePath": "uikitbackend",
+    "symbolGraphPath": ".docs/symbol-graphs/{version}/UIKitBackend",
+    "catalogPath": "Documentation/UIKitBackend.docc"
+  }
+]
+```
+
+`symbolGraphPath` may name a graph file or a directory and supports
+`{version}`, `{ref}`, `{commit}`, and `{module}` placeholders. Every imported
+graph is validated against `moduleName`. Absolute source locations emitted on
+another CI runner are remapped to the prepared source checkout before DocC
+conversion, so version-correct source links still work.
+
+When `catalogPath` is omitted, VersionedDocC creates an empty catalog for the
+module. A module can be restricted to selected documentation versions with a
+`versions` array; otherwise its input must exist for every configured version.
+Modules that are intentionally absent from an older version appear as API
+additions in the next adjacent comparison.
+
+This keeps platform compilation in the package's existing workflow. The final
+documentation job only needs to download and extract the symbol-graph artifacts
+to the paths named in `.vdc.json` before invoking VersionedDocC. Cached version
+entries retain the merged site and every module's graphs, so later assembly and
+API Changes generation do not need the original CI artifacts.
+
 Use an explicit `versions` array when a site needs fixed release snapshots:
 
 ```json
