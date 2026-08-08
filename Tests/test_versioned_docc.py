@@ -771,6 +771,61 @@ class VersionedDocCTests(unittest.TestCase):
             )
             self.assertNotIn("versionedDocC", generated["metadata"])
 
+    def test_edit_metadata_does_not_apply_authored_page_to_merged_module(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            catalog = root / "00-DemoKit.docc"
+            catalog.mkdir()
+            (catalog / "Backend.md").write_text(
+                "# ``Backend``\n", encoding="utf-8"
+            )
+            document_path = (
+                root
+                / "site"
+                / "data"
+                / "documentation"
+                / "backend"
+                / "backend.json"
+            )
+            document_path.parent.mkdir(parents=True)
+            document_path.write_text(
+                json.dumps(
+                    {
+                        "identifier": {
+                            "url": "doc://01-Backend/documentation/Backend/Backend"
+                        },
+                        "metadata": {
+                            "role": "symbol",
+                            "remoteSource": {
+                                "url": "https://github.com/Example/DemoKit/blob/main/Sources/Backend/Backend.swift#L1"
+                            },
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            config = {
+                "documentationOnly": False,
+                "sourceRepository": "https://github.com/Example/DemoKit",
+                "siteUI": {"showEdit": True},
+            }
+
+            versioned_docc.inject_edit_metadata(
+                root / "site",
+                catalog,
+                "Sources/DemoKit/DemoKit.docc",
+                config,
+                {"name": "main"},
+                "main",
+                "00-DemoKit",
+            )
+
+            document = json.loads(document_path.read_text())
+            self.assertEqual(
+                document["metadata"]["versionedDocC"]["editURL"],
+                "https://github.com/Example/DemoKit/edit/main/Sources/Backend/Backend.swift#L1",
+            )
+
     def test_legacy_routing_files_cover_project_and_deploy_roots(self):
         config = {
             "hostingBasePath": "/DemoKit",
@@ -1349,6 +1404,94 @@ class VersionedDocCTests(unittest.TestCase):
             ):
                 versioned_docc.load_config(root, path)
 
+    def test_additional_modules_accept_external_symbol_graphs_per_version(self):
+        config = {
+            "schemaVersion": 1,
+            "projectName": "DemoKit",
+            "moduleName": "DemoKit",
+            "targetName": "DemoKit",
+            "catalogPath": "Sources/DemoKit/DemoKit.docc",
+            "hostingBasePath": "/DemoKit",
+            "versions": [
+                {"name": "main", "ref": "HEAD"},
+                {"name": "0.1.0", "ref": "0.1.0"},
+            ],
+            "additionalModules": [
+                {
+                    "moduleName": "PlatformBackend",
+                    "symbolGraphPath": ".docs/inputs/{version}/{module}",
+                }
+            ],
+            "allowedModules": ["DemoKit"],
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = root / ".vdc.json"
+            path.write_text(json.dumps(config), encoding="utf-8")
+
+            loaded, _ = versioned_docc.load_config(root, path)
+
+        self.assertEqual(
+            versioned_docc.configured_module_names(loaded),
+            ["DemoKit", "PlatformBackend"],
+        )
+        self.assertEqual(
+            versioned_docc.configured_module_paths(loaded),
+            ["demokit", "platformbackend"],
+        )
+        self.assertEqual(
+            loaded["allowedModules"], ["DemoKit", "PlatformBackend"]
+        )
+
+    def test_import_symbol_graphs_rewrites_checkout_location(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source_root = root / "checkout"
+            source_file = source_root / "Sources" / "PlatformBackend" / "Backend.swift"
+            source_file.parent.mkdir(parents=True)
+            source_file.write_text("public struct Backend {}\n", encoding="utf-8")
+            inputs = root / "inputs" / "main" / "PlatformBackend"
+            inputs.mkdir(parents=True)
+            graph_path = inputs / "PlatformBackend.symbols.json"
+            graph_path.write_text(
+                json.dumps(
+                    {
+                        "module": {"name": "PlatformBackend"},
+                        "symbols": [
+                            {
+                                "identifier": {"precise": "s:15PlatformBackend0B0V"},
+                                "location": {
+                                    "uri": "file:///old/runner/work/project/Sources/PlatformBackend/Backend.swift"
+                                },
+                            }
+                        ],
+                        "relationships": [],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            destination = root / "copied"
+            versioned_docc.import_symbol_graphs(
+                root,
+                source_root,
+                {
+                    "moduleName": "PlatformBackend",
+                    "symbolGraphPath": "inputs/{version}/{module}",
+                },
+                {"name": "main", "ref": "HEAD"},
+                "a" * 40,
+                destination,
+                {"PlatformBackend"},
+            )
+
+            copied = json.loads(
+                (destination / graph_path.name).read_text(encoding="utf-8")
+            )
+
+        self.assertEqual(
+            copied["symbols"][0]["location"]["uri"], source_file.resolve().as_uri()
+        )
+
     def test_symbol_graph_platform_configuration_orders_default_first(self):
         config = {
             "schemaVersion": 1,
@@ -1534,6 +1677,15 @@ class VersionedDocCTests(unittest.TestCase):
                 )
             )
 
+            self.assertFalse(
+                versioned_docc.cache_valid(
+                    cache,
+                    "commit",
+                    "fingerprint",
+                    ["DemoKit", "PlatformBackend"],
+                )
+            )
+
     def test_documentation_only_cache_does_not_require_symbol_graphs(self):
         with tempfile.TemporaryDirectory() as directory:
             cache = Path(directory)
@@ -1662,6 +1814,48 @@ class VersionedDocCTests(unittest.TestCase):
             self.assertEqual(
                 json.loads((site / "linkable-entities.json").read_text()),
                 [entities[0], entities[1]],
+            )
+
+    def test_prune_site_to_module_preserves_merged_archive_navigation_root(self):
+        with tempfile.TemporaryDirectory() as directory:
+            site = Path(directory)
+            index_path = site / "index" / "index.json"
+            index_path.parent.mkdir(parents=True)
+            index_path.write_text(
+                json.dumps(
+                    {
+                        "interfaceLanguages": {
+                            "swift": [
+                                {
+                                    "title": "Documentation",
+                                    "path": "/documentation",
+                                    "children": [
+                                        {"path": "/documentation/demokit"},
+                                        {"path": "/documentation/platformbackend"},
+                                        {"path": "/documentation/dependency"},
+                                    ],
+                                }
+                            ]
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            versioned_docc.prune_site_to_module(
+                site, "demokit", ["platformbackend"]
+            )
+
+            navigation = json.loads(index_path.read_text())["interfaceLanguages"][
+                "swift"
+            ]
+            self.assertEqual(navigation[0]["path"], "/documentation")
+            self.assertEqual(
+                navigation[0]["children"],
+                [
+                    {"path": "/documentation/demokit"},
+                    {"path": "/documentation/platformbackend"},
+                ],
             )
 
 
