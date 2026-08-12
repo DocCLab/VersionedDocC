@@ -1618,6 +1618,65 @@ class VersionedDocCTests(unittest.TestCase):
             ["s:4Demo1PV"],
         )
 
+    def test_clang_usr_extracts_module(self):
+        usr = versioned_docc.ClangUSR.parse(
+            "c:@M@UIKitBackend@objc(cs)ApplicationDelegate"
+        )
+
+        self.assertEqual(usr.module, "UIKitBackend")
+        self.assertIsNone(versioned_docc.ClangUSR.parse("s:12UIKitBackend"))
+        self.assertIsNone(
+            versioned_docc.ClangUSR.parse("c:objc(cs)UIResponder").module
+        )
+
+    def test_filter_symbol_graph_uses_clang_usr_module(self):
+        application_delegate = "c:@M@A@objc(cs)ApplicationDelegate"
+        application_did_become_active = (
+            "c:@M@A@objc(cs)ApplicationDelegate(im)applicationDidBecomeActive:"
+        )
+        graph = {
+            "symbols": [
+                {"identifier": {"precise": application_delegate}},
+                {"identifier": {"precise": application_did_become_active}},
+                {"identifier": {"precise": "c:@M@B@objc(cs)BDelegate"}},
+                {"identifier": {"precise": "c:@M@C@objc(cs)CDelegate"}},
+                {"identifier": {"precise": "c:@M@D@objc(cs)DDelegate"}},
+                {"identifier": {"precise": "c:objc(cs)UnqualifiedDelegate"}},
+            ],
+            "relationships": [
+                {
+                    "kind": "memberOf",
+                    "source": application_did_become_active,
+                    "target": application_delegate,
+                },
+                {
+                    "kind": "memberOf",
+                    "source": "c:@M@B@objc(cs)BDelegate(im)applicationDidBecomeActive:",
+                    "target": "c:@M@B@objc(cs)BDelegate",
+                },
+            ],
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "A.symbols.json"
+            path.write_text(json.dumps(graph), encoding="utf-8")
+            versioned_docc.filter_symbol_graph(path, {"A"})
+            filtered = json.loads(path.read_text(encoding="utf-8"))
+
+        self.assertEqual(
+            [item["identifier"]["precise"] for item in filtered["symbols"]],
+            [application_delegate, application_did_become_active],
+        )
+        self.assertEqual(
+            filtered["relationships"],
+            [
+                {
+                    "kind": "memberOf",
+                    "source": application_did_become_active,
+                    "target": application_delegate,
+                }
+            ],
+        )
+
     def test_retain_symbol_graph_module_keeps_extension_graphs(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

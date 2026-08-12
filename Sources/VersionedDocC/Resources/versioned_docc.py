@@ -24,7 +24,7 @@ DEFAULT_CONFIG = ".vdc.json"
 # Keep this stable across releases that only change assembly, routing, or the
 # command interface. Bump it only when the per-version DocC cache contents must
 # be regenerated. Its initial value preserves 0.0.1 cache fingerprints.
-BUILD_CACHE_REVISION = "0.0.3"
+BUILD_CACHE_REVISION = "0.0.4"
 SEMVER = re.compile(r"^v?(\d+)\.(\d+)\.(\d+)(?:[-+].*)?$")
 LATEST_RELEASE_STRATEGIES = {"majorMinor", "semanticVersion", "tagDate"}
 OPTIONS_TOKEN = "__VERSIONED_DOCC_VERSION_OPTIONS__"
@@ -565,6 +565,32 @@ def swift_module(precise_identifier):
     return remainder[start : start + length]
 
 
+class ClangUSR:
+    MODULE = re.compile(r"^c:@M@([^@]+)(?:@|$)")
+
+    def __init__(self, precise_identifier):
+        self.precise_identifier = precise_identifier
+
+    @classmethod
+    def parse(cls, precise_identifier):
+        if not precise_identifier.startswith("c:"):
+            return None
+        return cls(precise_identifier)
+
+    @property
+    def module(self):
+        match = self.MODULE.match(self.precise_identifier)
+        return match.group(1) if match else None
+
+
+def symbol_module(precise_identifier):
+    module = swift_module(precise_identifier)
+    if module is not None:
+        return module
+    clang_usr = ClangUSR.parse(precise_identifier)
+    return clang_usr.module if clang_usr is not None else None
+
+
 def filter_symbol_graph(path, allowed_modules):
     with path.open(encoding="utf-8") as source:
         graph = json.load(source)
@@ -572,7 +598,10 @@ def filter_symbol_graph(path, allowed_modules):
     symbols = [
         symbol
         for symbol in original_symbols
-        if swift_module(symbol.get("identifier", {}).get("precise", "")) in allowed_modules
+        if (
+            symbol_module(symbol.get("identifier", {}).get("precise", ""))
+            in allowed_modules
+        )
     ]
     identifiers = {symbol["identifier"]["precise"] for symbol in symbols}
     original_relationships = graph.get("relationships", [])
