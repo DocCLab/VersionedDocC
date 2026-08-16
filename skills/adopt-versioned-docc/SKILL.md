@@ -34,7 +34,8 @@ Set these fields from the package rather than guessing:
 - `moduleName` and `targetName`: documented Swift module and package target.
 - `modulePath`: DocC's lowercase route for the module.
 - `catalogPath`: the target's real `.docc` catalog.
-- `hostingBasePath`: GitHub Pages project path, normally `/<repository>`.
+- `hostingBasePath`: `/<repository>` for a project site, or `/` when a custom
+  domain serves the documentation at its root.
 - `sourceRepository`: canonical HTTPS GitHub repository URL.
 - `defaultVersion`: normally `main`.
 
@@ -88,8 +89,9 @@ Add or adapt a documentation workflow that:
 3. Restores `.docs/cache/versioned-docc` with a rolling GitHub Actions cache.
 4. Selects the required Xcode/toolchain and DocC renderer before building.
 5. Invokes `DocCLab/VersionedDocC@<stable-tag>` with `.vdc.json`.
-6. Uploads `.docs/build/versioned-site/<projectName>` as the Pages artifact and
-   deploys it with `actions/deploy-pages`.
+6. Uploads `.docs/build/versioned-site/<projectName>` for a project path, or
+   `.docs/build/versioned-site` for root hosting, and deploys it with
+   `actions/deploy-pages`.
 
 For OCI caching, grant `packages: write`, install ORAS, log in to GHCR with the
 workflow token, configure a lowercase repository such as

@@ -477,6 +477,7 @@ class VersionedDocCTests(unittest.TestCase):
             "targetName": "DemoKit",
             "moduleName": "DemoKit",
             "catalogPath": "Sources/DemoKit/DemoKit.docc",
+            "hostingBasePath": "/DemoKit",
             "environment": {},
             "buildArguments": [],
             "doccArguments": [],
@@ -507,9 +508,16 @@ class VersionedDocCTests(unittest.TestCase):
             changed_footer = versioned_docc.build_fingerprint(
                 config, Path("/docc"), "header", "changed footer"
             )
+            changed_hosting = versioned_docc.build_fingerprint(
+                {**config, "hostingBasePath": ""},
+                Path("/docc"),
+                "header",
+                "footer",
+            )
 
         self.assertNotEqual(baseline, changed_ui)
         self.assertNotEqual(baseline, changed_footer)
+        self.assertNotEqual(baseline, changed_hosting)
 
     def test_github_pages_fallback_redirects_legacy_path_to_default_version(self):
         config = {
@@ -525,6 +533,59 @@ class VersionedDocCTests(unittest.TestCase):
         self.assertIn("window.location.search + window.location.hash", fallback)
         self.assertIn("window.location.replace(target)", fallback)
         self.assertIn("data-versioned-docc-pages-fallback", fallback)
+
+    def test_root_hosting_base_path_renders_single_slash_urls(self):
+        config = {
+            "documentationOnly": False,
+            "hostingBasePath": "",
+            "defaultVersion": "main",
+            "modulePath": "demokit",
+            "projectName": "DemoKit",
+        }
+        header = versioned_docc.render_header(
+            (RESOURCE_ROOT / "header.html").read_text(encoding="utf-8"),
+            config,
+            "main",
+            "2026-08-16",
+        )
+        footer = versioned_docc.render_footer(
+            (RESOURCE_ROOT / "footer.html").read_text(encoding="utf-8"),
+            config,
+            "main",
+        )
+        root = versioned_docc.root_index(config)
+        fallback = versioned_docc.github_pages_fallback(config)
+        dashboard = api_changes.render_dashboard(
+            [
+                {
+                    "id": "1.0-to-main",
+                    "previousVersion": "1.0",
+                    "currentVersion": "main",
+                    "counts": {"added": 0, "modified": 0, "removed": 0},
+                    "changes": [],
+                }
+            ],
+            mock.Mock(
+                hosting_base_path="",
+                default_version="main",
+                module_path="demokit",
+                project_name="DemoKit",
+                build_date="2026-08-16",
+                page_size=10,
+            ),
+        )
+
+        self.assertIn('href="/main/documentation/demokit/"', header)
+        self.assertIn('href="/main/changes/"', header)
+        self.assertIn('const siteRoot = "/main";', footer)
+        self.assertIn("url=/main/documentation/demokit/", root)
+        self.assertIn('const legacyRoot = "/documentation";', fallback)
+        self.assertIn('const versionedRoot = "/main/documentation";', fallback)
+        self.assertIn('<link rel="canonical" href="/main/changes/">', dashboard)
+        self.assertIn('class="brand" href="/main/documentation/demokit/"', dashboard)
+        self.assertNotIn(
+            "//main", "\n".join((header, footer, root, fallback, dashboard))
+        )
 
     def test_documentation_only_header_omits_api_changes(self):
         template = (RESOURCE_ROOT / "header.html").read_text(encoding="utf-8")
@@ -846,6 +907,31 @@ class VersionedDocCTests(unittest.TestCase):
                     "/DemoKit/documentation/* "
                     "/DemoKit/main/documentation/:splat 301\n",
                 )
+
+    def test_root_routing_and_preview_use_artifact_as_deploy_root(self):
+        config = {
+            "hostingBasePath": "",
+            "defaultVersion": "main",
+            "modulePath": "demokit",
+            "projectName": "DemoKit",
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            parent = Path(directory)
+            output_path = parent / "versioned-site"
+            output_path.mkdir()
+
+            versioned_docc.write_legacy_routing_files(output_path, config)
+
+            self.assertEqual(
+                versioned_docc.deployment_root(output_path, config), output_path
+            )
+            self.assertTrue((output_path / "404.html").is_file())
+            self.assertEqual(
+                (output_path / "_redirects").read_text(),
+                "/documentation/* /main/documentation/:splat 301\n",
+            )
+            self.assertFalse((parent / "404.html").exists())
+            self.assertFalse((parent / "_redirects").exists())
 
     def test_prepared_source_uses_clones_without_registering_worktrees(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -1381,6 +1467,39 @@ class VersionedDocCTests(unittest.TestCase):
         self.assertEqual(
             loaded["allowedModules"], ["the-swift-programming-language"]
         )
+
+    def test_root_hosting_base_path_defaults_output_to_site_root(self):
+        config = {
+            "schemaVersion": 1,
+            "documentationOnly": True,
+            "projectName": "Guide",
+            "modulePath": "guide",
+            "catalogPath": "Guide.docc",
+            "hostingBasePath": "/",
+            "versions": [
+                {"name": "main", "ref": "HEAD"},
+                {"name": "1.0.0", "ref": "1.0.0"},
+            ],
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = root / ".vdc.json"
+            path.write_text(json.dumps(config), encoding="utf-8")
+
+            loaded, _ = versioned_docc.load_config(root, path)
+
+            self.assertEqual(loaded["hostingBasePath"], "")
+            self.assertEqual(
+                loaded["outputPath"], ".docs/build/versioned-site"
+            )
+
+            config["hostingBasePath"] = ""
+            path.write_text(json.dumps(config), encoding="utf-8")
+            with self.assertRaisesRegex(
+                versioned_docc.VersionedDocCError,
+                "missing configuration keys: hostingBasePath",
+            ):
+                versioned_docc.load_config(root, path)
 
     def test_symbol_documentation_configuration_requires_swift_target(self):
         config = {

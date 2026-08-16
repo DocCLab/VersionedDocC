@@ -47,7 +47,11 @@
       },
       "default": []
     },
-    "hostingBasePath": { "type": "string", "pattern": "^/[A-Za-z0-9._/-]+$" },
+    "hostingBasePath": {
+      "type": "string",
+      "description": "Public URL prefix. Use / when publishing at a domain root.",
+      "pattern": "^/[A-Za-z0-9._/-]*$"
+    },
     "defaultVersion": { "type": "string", "default": "main" },
     "outputPath": { "type": "string" },
     "cachePath": { "type": "string" },

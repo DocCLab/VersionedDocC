@@ -108,6 +108,11 @@ Add `.vdc.json` to the package root:
 }
 ```
 
+Set `hostingBasePath` to the GitHub Pages project path, such as
+`/ExampleKit`. Use `/` when a custom domain serves the documentation at its
+root. Root-hosted output defaults to `.docs/build/versioned-site`; a project
+path appends its final component, such as `.docs/build/versioned-site/ExampleKit`.
+
 ### Site UI
 
 When `sourceRepository` is configured, VersionedDocC shows **Edit this page**

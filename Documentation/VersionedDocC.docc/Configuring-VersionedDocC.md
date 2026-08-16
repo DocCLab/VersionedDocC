@@ -162,6 +162,11 @@ fallback. Together they preserve old unversioned links such as
 `/MyGuide/documentation/myguide/` by sending readers to the configured default
 version.
 
+Use a project prefix such as `/MyGuide` for a standard GitHub project site. Use
+`/` when a custom domain or user/organization Pages site serves the artifact at
+the domain root. Changing this value rebuilds cached DocC output because static
+hosting URLs are embedded during conversion.
+
 Treat these fields as public URL contracts:
 
 - `hostingBasePath`

@@ -64,7 +64,8 @@ names, paths, and repository URL:
 For a GitHub project site, `hostingBasePath` normally matches the repository name
 exactly, including capitalization. `modulePath` is the lowercase route DocC uses
 after `/documentation/`; verify it against an existing local DocC build if the
-module has a custom display name.
+module has a custom display name. Set `hostingBasePath` to `/` when a custom
+domain serves the site at its root.
 
 See <doc:Configuring-VersionedDocC> for multi-platform builds, fixed version
 lists, and standalone catalogs.

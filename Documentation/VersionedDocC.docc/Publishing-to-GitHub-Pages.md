@@ -39,6 +39,10 @@ Replace `ExampleKit` in `artifact-path` with the final component of your
 `hostingBasePath`. Upload that directory itself, not its parent: GitHub already
 serves a project Pages artifact below the repository's path.
 
+For a custom domain served at its root, configure `"hostingBasePath": "/"` and
+upload `.docs/build/versioned-site` instead. This is also the default
+`artifact-path` of the reusable workflow.
+
 The tag trigger republishes the selector when a new release appears. A tag push
 doesn't need to run on every tag in your repository; narrow the pattern if only
 some tags represent releases.

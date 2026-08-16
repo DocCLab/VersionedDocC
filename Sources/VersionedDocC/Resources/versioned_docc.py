@@ -149,8 +149,15 @@ def load_config(package_root, config_path):
     missing = [key for key in required if not config.get(key)]
     if missing:
         raise VersionedDocCError(f"missing configuration keys: {', '.join(missing)}")
-    base_path = "/" + config["hostingBasePath"].strip("/")
-    if not re.fullmatch(r"(?:/[A-Za-z0-9._-]+)+", base_path):
+    configured_base_path = config["hostingBasePath"]
+    if not isinstance(configured_base_path, str):
+        raise VersionedDocCError(
+            f"invalid hostingBasePath: {configured_base_path}"
+        )
+    base_path = "" if configured_base_path == "/" else (
+        "/" + configured_base_path.strip("/")
+    )
+    if base_path and not re.fullmatch(r"(?:/[A-Za-z0-9._-]+)+", base_path):
         raise VersionedDocCError(f"invalid hostingBasePath: {base_path}")
     config["hostingBasePath"] = base_path
     if not documentation_only:
@@ -978,6 +985,7 @@ def build_fingerprint(config, docc_binary, header_template, footer_template=""):
         "renderer": renderer_id,
         "header": sha256_bytes(header_template.encode()),
         "footer": sha256_bytes(footer_template.encode()),
+        "hostingBasePath": config.get("hostingBasePath", ""),
         "siteUI": config.get("siteUI", {}),
         "documentationOnly": config.get("documentationOnly", False),
         "target": config.get("targetName"),
@@ -1875,16 +1883,24 @@ def github_pages_fallback(config):
 </body></html>\n"""
 
 
+def deployment_root(output_path, config):
+    return output_path.parent if config["hostingBasePath"] else output_path
+
+
 def write_legacy_routing_files(output_path, config):
     redirect = (
         f"{config['hostingBasePath']}/documentation/* "
         f"{config['hostingBasePath']}/{config['defaultVersion']}/documentation/:splat 301\n"
     )
     fallback = github_pages_fallback(config)
-    # output_path is convenient for workflows that upload the project site
-    # directly. output_path.parent is the deploy root used when hostingBasePath
-    # is represented as a physical directory, as in the local preview.
-    for root in (output_path, output_path.parent):
+    # output_path is convenient for workflows that upload the site directly.
+    # A project hostingBasePath is also represented as a physical child of the
+    # deploy root during local preview; a domain-root site has no such parent.
+    roots = [output_path]
+    deploy_root = deployment_root(output_path, config)
+    if deploy_root != output_path:
+        roots.append(deploy_root)
+    for root in roots:
         (root / "_redirects").write_text(redirect, encoding="utf-8")
         (root / "404.html").write_text(fallback, encoding="utf-8")
 
@@ -2116,7 +2132,7 @@ def preview_command(arguments):
     package_root = resolve_path(Path.cwd(), arguments.package_path)
     config, _ = load_config(package_root, arguments.config)
     output_path = resolve_path(package_root, arguments.output or config["outputPath"])
-    web_root = output_path.parent
+    web_root = deployment_root(output_path, config)
     if not output_path.is_dir():
         raise VersionedDocCError(f"missing assembled site: {output_path}")
     legacy_prefix = f"{config['hostingBasePath']}/documentation/"
