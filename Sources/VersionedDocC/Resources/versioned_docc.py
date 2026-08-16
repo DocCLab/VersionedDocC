@@ -797,8 +797,7 @@ def contextual_changes_script(config):
     )
     return f"""<script>
 (() => {{
-  const root = document.currentScript?.getRootNode();
-  const link = root?.querySelector(".versioned-docc-changes");
+  const link = document.querySelector("custom-header")?.shadowRoot?.querySelector(".versioned-docc-changes");
   if (!link) return;
   const changesRoot = {json.dumps(changes_root)};
   const modules = {json.dumps(modules, separators=(",", ":"))};

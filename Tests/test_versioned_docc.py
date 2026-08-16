@@ -666,6 +666,9 @@ class VersionedDocCTests(unittest.TestCase):
         self.assertIn('const changesRoot = "/DemoKit/main/changes/";', header)
         self.assertIn('"path":"demokit"', header)
         self.assertIn('"path":"platformbackend"', header)
+        self.assertIn(
+            'document.querySelector("custom-header")?.shadowRoot', header
+        )
         self.assertIn("link.href = changesRoot + (module ? module.path", header)
 
     def test_site_ui_renders_star_edit_and_powered_by_links(self):
