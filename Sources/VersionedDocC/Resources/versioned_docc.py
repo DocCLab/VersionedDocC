@@ -782,6 +782,56 @@ def star_link(config):
     )
 
 
+def contextual_changes_script(config):
+    if config["documentationOnly"] or len(config.get("additionalModules", [])) == 0:
+        return ""
+    modules = [
+        {"name": config["moduleName"], "path": config["modulePath"]},
+        *[
+            {"name": module["moduleName"], "path": module["modulePath"]}
+            for module in config["additionalModules"]
+        ],
+    ]
+    changes_root = (
+        f'{config["hostingBasePath"]}/{config["defaultVersion"]}/changes/'
+    )
+    return f"""<script>
+(() => {{
+  const root = document.currentScript?.getRootNode();
+  const link = root?.querySelector(".versioned-docc-changes");
+  if (!link) return;
+  const changesRoot = {json.dumps(changes_root)};
+  const modules = {json.dumps(modules, separators=(",", ":"))};
+
+  function updateChangesLink() {{
+    const marker = "/documentation/";
+    const markerIndex = window.location.pathname.indexOf(marker);
+    const candidate = markerIndex < 0
+      ? ""
+      : decodeURIComponent(window.location.pathname.slice(markerIndex + marker.length).split("/", 1)[0]);
+    const module = modules.find(item => item.path.toLowerCase() === candidate.toLowerCase());
+    link.href = changesRoot + (module ? module.path + "/" : "");
+  }}
+
+  if (!window.__versionedDocCNavigationEventsInstalled) {{
+    window.__versionedDocCNavigationEventsInstalled = true;
+    for (const method of ["pushState", "replaceState"]) {{
+      const original = window.history[method];
+      window.history[method] = function (...arguments_) {{
+        const result = original.apply(this, arguments_);
+        window.dispatchEvent(new Event("versioned-docc-navigation"));
+        return result;
+      }};
+    }}
+  }}
+  window.addEventListener("versioned-docc-navigation", updateChangesLink);
+  window.addEventListener("popstate", updateChangesLink);
+  window.addEventListener("pageshow", updateChangesLink);
+  updateChangesLink();
+}})();
+</script>"""
+
+
 def render_header(template, config, version, build_date):
     base = config["hostingBasePath"]
     module_path = config["modulePath"]
@@ -795,6 +845,9 @@ def render_header(template, config, version, build_date):
         )
         if changes_enabled(config)
         else "",
+        "__VERSIONED_DOCC_CONTEXTUAL_CHANGES_SCRIPT__": (
+            contextual_changes_script(config) if changes_enabled(config) else ""
+        ),
         "__VERSIONED_DOCC_BUILD_DATE__": build_date,
         "__VERSIONED_DOCC_CURRENT_VERSION__": version,
         "__VERSIONED_DOCC_STAR_LINK__": star_link(config),
@@ -2122,6 +2175,11 @@ def assemble(package_root, config, versions, cache_root, output_path, build_date
         "--page-size",
         str(config["apiChanges"]["pageSize"]),
     ]
+    if not config["documentationOnly"]:
+        for module in modules_for_version(config, versions[0]):
+            api_command.extend(
+                ["--module", f"{module['moduleName']}={module['modulePath']}"]
+            )
     if site_ui_value(config, "showStar"):
         api_command.extend(
             ["--star-repository-url", config["sourceRepository"].rstrip("/")]

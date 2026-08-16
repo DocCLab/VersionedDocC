@@ -265,7 +265,12 @@ conversion, so version-correct source links still work.
 When `catalogPath` is omitted, VersionedDocC creates an empty catalog for the
 module. Every additional module follows the primary module's documentation
 versions, so its input must exist for every configured version. All modules
-participate in each adjacent-version API comparison.
+participate in each adjacent-version API comparison. Sites with more than one
+module can switch between **All Modules** and a single module from the Changes
+page. The aggregate comparison lives at `/<version>/changes/`; each module has
+a fixed `/<version>/changes/<modulePath>/` comparison page. From a DocC symbol
+or article page, the header's **API Changes** link follows the current
+`modulePath`; the documentation root links to the aggregate comparison.
 
 Additional modules in the primary package repository inherit its source
 repository, checkout root, and version ref. For a module in a separate

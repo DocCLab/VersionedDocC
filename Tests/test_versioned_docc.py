@@ -642,6 +642,32 @@ class VersionedDocCTests(unittest.TestCase):
 
         self.assertIn('href="/DemoKit/main/changes/">API Changes</a>', header)
 
+    def test_multi_module_header_routes_api_changes_to_current_module(self):
+        template = (RESOURCE_ROOT / "header.html").read_text(encoding="utf-8")
+        config = {
+            "documentationOnly": False,
+            "hostingBasePath": "/DemoKit",
+            "defaultVersion": "main",
+            "moduleName": "DemoKit",
+            "modulePath": "demokit",
+            "projectName": "DemoKit",
+            "additionalModules": [
+                {
+                    "moduleName": "PlatformBackend",
+                    "modulePath": "platformbackend",
+                }
+            ],
+        }
+
+        header = versioned_docc.render_header(
+            template, config, "main", "2026-08-17"
+        )
+
+        self.assertIn('const changesRoot = "/DemoKit/main/changes/";', header)
+        self.assertIn('"path":"demokit"', header)
+        self.assertIn('"path":"platformbackend"', header)
+        self.assertIn("link.href = changesRoot + (module ? module.path", header)
+
     def test_site_ui_renders_star_edit_and_powered_by_links(self):
         header_template = (RESOURCE_ROOT / "header.html").read_text(encoding="utf-8")
         footer_template = (RESOURCE_ROOT / "footer.html").read_text(encoding="utf-8")
@@ -1226,6 +1252,53 @@ class VersionedDocCTests(unittest.TestCase):
             snapshot["CommonAPI"]["availability"], ["iOS 13", "macOS 10"]
         )
 
+    def test_api_changes_keep_colliding_symbols_scoped_to_their_modules(self):
+        def graph(module_name, precise):
+            return {
+                "module": {"name": module_name},
+                "symbols": [
+                    {
+                        "identifier": {"precise": precise},
+                        "pathComponents": ["Configuration"],
+                        "names": {"title": "Configuration"},
+                    }
+                ],
+            }
+
+        modules = [
+            {"name": "DemoKit", "path": "demokit", "primary": True},
+            {
+                "name": "PlatformBackend",
+                "path": "platformbackend",
+                "primary": False,
+            },
+        ]
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            primary = root / "DemoKit.symbols.json"
+            backend = root / "PlatformBackend.symbols.json"
+            primary.write_text(json.dumps(graph("DemoKit", "demo")), encoding="utf-8")
+            backend.write_text(
+                json.dumps(graph("PlatformBackend", "backend")), encoding="utf-8"
+            )
+
+            snapshot = api_changes.merge_snapshots(
+                [primary, backend], "demokit", None, modules
+            )
+
+        self.assertEqual(len(snapshot), 2)
+        self.assertEqual(
+            {item["modulePath"] for item in snapshot.values()},
+            {"demokit", "platformbackend"},
+        )
+        self.assertEqual(
+            {item["path"] for item in snapshot.values()},
+            {
+                "/documentation/demokit/configuration",
+                "/documentation/platformbackend/configuration",
+            },
+        )
+
     def test_api_changes_merge_deduplicates_reordered_overloads(self):
         def symbol(precise, declaration):
             return {
@@ -1299,6 +1372,79 @@ class VersionedDocCTests(unittest.TestCase):
         self.assertIn("const PAGE_SIZE=17", dashboard)
         self.assertIn("window.addEventListener('pageshow',restoreAndRender)", dashboard)
         self.assertIn("window.addEventListener('popstate',restoreAndRender)", dashboard)
+
+    def test_multi_module_dashboard_renders_module_route_selector(self):
+        arguments = mock.Mock(
+            hosting_base_path="/DemoKit",
+            default_version="main",
+            module_path="demokit",
+            project_name="DemoKit",
+            build_date="2026-08-17",
+            page_size=10,
+            star_repository_url=None,
+            powered_by_url=None,
+        )
+        modules = [
+            {"name": "DemoKit", "path": "demokit", "primary": True},
+            {
+                "name": "PlatformBackend",
+                "path": "platformbackend",
+                "primary": False,
+            },
+        ]
+        comparison = {
+            "id": "1.0-to-main",
+            "previousVersion": "1.0",
+            "currentVersion": "main",
+            "counts": {"added": 1, "modified": 0, "removed": 0},
+            "changes": [
+                {
+                    "type": "added",
+                    "source": "api",
+                    "current": {
+                        "title": "Window",
+                        "displayId": "Window",
+                        "declaration": "struct Window",
+                        "kind": "Structure",
+                        "path": "/documentation/platformbackend/window",
+                        "availability": [],
+                        "moduleName": "PlatformBackend",
+                        "modulePath": "platformbackend",
+                    },
+                }
+            ],
+        }
+
+        overview = api_changes.render_dashboard(
+            [comparison], arguments, ["api"], modules
+        )
+        module = api_changes.render_dashboard(
+            [comparison], arguments, ["api"], modules, "platformbackend"
+        )
+
+        self.assertIn('id="module-scope"', overview)
+        self.assertIn('<option value="">All Modules</option>', overview)
+        self.assertIn('<option value="demokit">DemoKit</option>', overview)
+        self.assertIn(
+            '<option value="platformbackend">PlatformBackend</option>', overview
+        )
+        self.assertIn("moduleScope.addEventListener('change'", overview)
+        self.assertNotIn("Generated from immutable", overview)
+        self.assertNotIn("module-card", overview)
+        self.assertIn('const SCOPE=null', overview)
+        self.assertIn(
+            '<link rel="canonical" href="/DemoKit/main/changes/">', overview
+        )
+        self.assertIn('const SCOPE="platformbackend"', module)
+        self.assertIn(
+            '<link rel="canonical" href="/DemoKit/main/changes/platformbackend/">',
+            module,
+        )
+        self.assertIn(
+            '<option value="platformbackend" selected>PlatformBackend</option>',
+            module,
+        )
+        self.assertIn("<title>API Changes · PlatformBackend", module)
 
     def test_article_changes_compare_rendered_content_without_reference_noise(self):
         identifier = "doc://org.example/documentation/Guide/Overview"
