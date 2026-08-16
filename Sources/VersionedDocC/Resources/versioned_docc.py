@@ -1748,10 +1748,13 @@ def prune_site_to_module(site_root, module_path, allowed_module_paths=()):
     expected = {
         module.casefold() for module in (module_path, *allowed_module_paths)
     }
+    documentation_entries = set(expected)
+    if (site_root / "data" / "documentation.json").is_file():
+        documentation_entries.add("index.html")
     removed_entries = 0
 
     for root, keep_names in (
-        (site_root / "documentation", expected),
+        (site_root / "documentation", documentation_entries),
         (
             site_root / "data" / "documentation",
             expected | {f"{module}.json" for module in expected},

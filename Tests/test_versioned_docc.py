@@ -1770,6 +1770,7 @@ class VersionedDocCTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             site = Path(directory)
             for path in (
+                site / "documentation" / "index.html",
                 site / "documentation" / "openswiftui" / "index.html",
                 site / "documentation" / "uikit" / "index.html",
                 site / "documentation" / "swiftsyntax" / "index.html",
@@ -1852,6 +1853,7 @@ class VersionedDocCTests(unittest.TestCase):
 
             self.assertTrue((site / "documentation" / "openswiftui").is_dir())
             self.assertTrue((site / "documentation" / "uikit").is_dir())
+            self.assertFalse((site / "documentation" / "index.html").exists())
             self.assertFalse((site / "documentation" / "swiftsyntax").exists())
             self.assertTrue((site / "data" / "documentation" / "openswiftui").is_dir())
             self.assertTrue((site / "data" / "documentation" / "uikit").is_dir())
@@ -1874,6 +1876,32 @@ class VersionedDocCTests(unittest.TestCase):
                 json.loads((site / "linkable-entities.json").read_text()),
                 [entities[0], entities[1]],
             )
+
+    def test_prune_site_to_module_preserves_merged_archive_documentation_index(self):
+        with tempfile.TemporaryDirectory() as directory:
+            site = Path(directory)
+            documentation_index = site / "documentation" / "index.html"
+            documentation_index.parent.mkdir(parents=True)
+            documentation_index.write_text("DocC shell\n", encoding="utf-8")
+            for module in ("demokit", "platformbackend", "dependency"):
+                module_index = site / "documentation" / module / "index.html"
+                module_index.parent.mkdir(parents=True)
+                module_index.write_text("module\n", encoding="utf-8")
+            collection = site / "data" / "documentation.json"
+            collection.parent.mkdir(parents=True)
+            collection.write_text('{"title":"Documentation"}\n', encoding="utf-8")
+
+            versioned_docc.prune_site_to_module(
+                site, "demokit", ["platformbackend"]
+            )
+
+            self.assertEqual(
+                documentation_index.read_text(encoding="utf-8"), "DocC shell\n"
+            )
+            self.assertTrue(collection.is_file())
+            self.assertTrue((site / "documentation" / "demokit").is_dir())
+            self.assertTrue((site / "documentation" / "platformbackend").is_dir())
+            self.assertFalse((site / "documentation" / "dependency").exists())
 
     def test_prune_site_to_module_preserves_merged_archive_navigation_root(self):
         with tempfile.TemporaryDirectory() as directory:
