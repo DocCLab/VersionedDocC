@@ -19,7 +19,7 @@ Add VersionedDocC as a direct dependency in `Package.swift`:
 dependencies: [
     .package(
         url: "https://github.com/DocCLab/VersionedDocC.git",
-        exact: "0.0.17"
+        exact: "0.0.18"
     ),
 ]
 ```
@@ -39,7 +39,7 @@ names, paths, and repository URL:
 
 ```json
 {
-  "$schema": "https://raw.githubusercontent.com/DocCLab/VersionedDocC/0.0.17/Schema/VersionedDocC.schema.json",
+  "$schema": "https://raw.githubusercontent.com/DocCLab/VersionedDocC/0.0.18/Schema/VersionedDocC.schema.json",
   "schemaVersion": 1,
   "projectName": "ExampleKit",
   "moduleName": "ExampleKit",

@@ -28,7 +28,7 @@ concurrency:
 
 jobs:
   documentation:
-    uses: DocCLab/VersionedDocC/.github/workflows/pages.yml@0.0.17
+    uses: DocCLab/VersionedDocC/.github/workflows/pages.yml@0.0.18
     with:
       config: .vdc.json
       artifact-path: .docs/build/versioned-site/ExampleKit
@@ -68,7 +68,7 @@ or a different deployment provider:
 - uses: actions/checkout@v7
   with:
     fetch-depth: 0
-- uses: DocCLab/VersionedDocC@0.0.17
+- uses: DocCLab/VersionedDocC@0.0.18
   with:
     config: .vdc.json
 - uses: actions/upload-pages-artifact@v5
