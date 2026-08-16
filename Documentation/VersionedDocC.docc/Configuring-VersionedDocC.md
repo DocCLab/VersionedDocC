@@ -137,7 +137,7 @@ A documentation repository without `Package.swift` can skip symbol graphs:
 
 ```json
 {
-  "$schema": "https://raw.githubusercontent.com/DocCLab/VersionedDocC/0.1.1/Schema/VersionedDocC.schema.json",
+  "$schema": "https://raw.githubusercontent.com/DocCLab/VersionedDocC/0.1.2/Schema/VersionedDocC.schema.json",
   "schemaVersion": 1,
   "documentationOnly": true,
   "projectName": "MyGuide",
