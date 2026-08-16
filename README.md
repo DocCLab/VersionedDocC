@@ -249,7 +249,9 @@ each module independently, and merges the DocC archives for that version:
     "moduleName": "UIKitBackend",
     "modulePath": "uikitbackend",
     "symbolGraphPath": ".docs/symbol-graphs/{version}/UIKitBackend",
-    "catalogPath": "Documentation/UIKitBackend.docc"
+    "catalogPath": "Documentation/UIKitBackend.docc",
+    "sourceRepository": "https://github.com/Example/UIKitBackend",
+    "sourceRoot": "../UIKitBackend"
   }
 ]
 ```
@@ -261,10 +263,21 @@ another CI runner are remapped to the prepared source checkout before DocC
 conversion, so version-correct source links still work.
 
 When `catalogPath` is omitted, VersionedDocC creates an empty catalog for the
-module. A module can be restricted to selected documentation versions with a
-`versions` array; otherwise its input must exist for every configured version.
-Modules that are intentionally absent from an older version appear as API
-additions in the next adjacent comparison.
+module. Every additional module follows the primary module's documentation
+versions, so its input must exist for every configured version. All modules
+participate in each adjacent-version API comparison.
+
+Additional modules in the primary package repository inherit its source
+repository, checkout root, and version ref. For a module in a separate
+repository, configure `sourceRepository` and `sourceRoot` together.
+`sourceRoot` is relative to the prepared primary checkout and must identify one
+of the exact dependency checkouts prepared from `localDependencies` and the
+selected version's `Package.resolved`. VersionedDocC reads that checkout's Git
+commit and uses the full SHA for DocC source links, authored-page Edit links,
+and cache metadata. When `sourceRoot` is present, `catalogPath` is relative to
+that module source root; `symbolGraphPath` remains relative to the package root.
+The source ref is intentionally not configurable, preventing published links
+from drifting away from the revision used to build the documentation.
 
 This keeps platform compilation in the package's existing workflow. The final
 documentation job only needs to download and extract the symbol-graph artifacts

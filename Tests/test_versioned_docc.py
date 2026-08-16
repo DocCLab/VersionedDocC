@@ -903,6 +903,59 @@ class VersionedDocCTests(unittest.TestCase):
         self.assertEqual(backend.parent.name, "01-platformbackend")
         self.assertNotEqual(primary, backend)
 
+    def test_edit_metadata_uses_module_repository_for_authored_merged_page(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            catalog = root / "01-Backend.docc"
+            catalog.mkdir()
+            (catalog / "Architecture.md").write_text(
+                "# Architecture\n", encoding="utf-8"
+            )
+            document_path = (
+                root
+                / "site"
+                / "data"
+                / "documentation"
+                / "backend"
+                / "architecture.json"
+            )
+            document_path.parent.mkdir(parents=True)
+            document_path.write_text(
+                json.dumps(
+                    {
+                        "identifier": {
+                            "url": "doc://Backend/documentation/Backend/Architecture"
+                        },
+                        "metadata": {"role": "article"},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            config = {
+                "documentationOnly": False,
+                "sourceRepository": "https://github.com/Example/DemoKit",
+                "siteUI": {"showEdit": True},
+            }
+
+            versioned_docc.inject_edit_metadata(
+                root / "site",
+                catalog,
+                "Documentation/Backend.docc",
+                config,
+                {"name": "main"},
+                "a" * 40,
+                "Backend",
+                source_repository="https://github.com/Example/Backend",
+            )
+
+            document = json.loads(document_path.read_text())
+            self.assertEqual(
+                document["metadata"]["versionedDocC"]["editURL"],
+                "https://github.com/Example/Backend/edit/"
+                + "a" * 40
+                + "/Documentation/Backend.docc/Architecture.md",
+            )
+
     def test_legacy_routing_files_cover_project_and_deploy_roots(self):
         config = {
             "hostingBasePath": "/DemoKit",
@@ -997,6 +1050,44 @@ class VersionedDocCTests(unittest.TestCase):
             with versioned_docc.PreparedSource(package, config, version, package_revision) as source:
                 self.assertTrue((source / ".git").is_dir())
                 self.assertTrue((source.parent / "Dependency" / "Dependency.swift").is_file())
+                module = {
+                    "moduleName": "Dependency",
+                    "sourceRepository": "https://github.com/Example/Dependency/",
+                    "sourceRoot": "../Dependency",
+                }
+                route = versioned_docc.module_source_route(
+                    package,
+                    config,
+                    version,
+                    source,
+                    module,
+                )
+                self.assertEqual(
+                    route,
+                    {
+                        "repository": "https://github.com/Example/Dependency",
+                        "reference": dependency_revision,
+                        "checkoutRoot": (source.parent / "Dependency").resolve(),
+                    },
+                )
+                self.assertEqual(
+                    versioned_docc.source_service_arguments(
+                        config,
+                        version,
+                        source,
+                        module,
+                        package,
+                    ),
+                    [
+                        "--source-service",
+                        "github",
+                        "--source-service-base-url",
+                        "https://github.com/Example/Dependency/blob/"
+                        + dependency_revision,
+                        "--checkout-path",
+                        str((source.parent / "Dependency").resolve()),
+                    ],
+                )
 
             after = versioned_docc.git(package, "worktree", "list", "--porcelain")
             self.assertEqual(before, after)
@@ -1539,7 +1630,7 @@ class VersionedDocCTests(unittest.TestCase):
             ):
                 versioned_docc.load_config(root, path)
 
-    def test_additional_modules_accept_external_symbol_graphs_per_version(self):
+    def test_additional_modules_follow_every_documentation_version(self):
         config = {
             "schemaVersion": 1,
             "projectName": "DemoKit",
@@ -1577,6 +1668,108 @@ class VersionedDocCTests(unittest.TestCase):
         self.assertEqual(
             loaded["allowedModules"], ["DemoKit", "PlatformBackend"]
         )
+        for version in loaded["versions"]:
+            self.assertEqual(
+                versioned_docc.configured_module_names(loaded, version),
+                ["DemoKit", "PlatformBackend"],
+            )
+
+    def test_additional_module_versions_are_rejected(self):
+        config = {
+            "schemaVersion": 1,
+            "projectName": "DemoKit",
+            "moduleName": "DemoKit",
+            "targetName": "DemoKit",
+            "catalogPath": "Sources/DemoKit/DemoKit.docc",
+            "hostingBasePath": "/DemoKit",
+            "versions": [
+                {"name": "main", "ref": "HEAD"},
+                {"name": "0.1.0", "ref": "0.1.0"},
+            ],
+            "additionalModules": [
+                {
+                    "moduleName": "PlatformBackend",
+                    "symbolGraphPath": ".docs/inputs/{version}/{module}",
+                    "versions": ["main"],
+                }
+            ],
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = root / ".vdc.json"
+            path.write_text(json.dumps(config), encoding="utf-8")
+            with self.assertRaisesRegex(
+                versioned_docc.VersionedDocCError,
+                "versions is not supported; additional modules follow every",
+            ):
+                versioned_docc.load_config(root, path)
+
+    def test_resolved_versions_include_exact_primary_commits(self):
+        with tempfile.TemporaryDirectory() as directory:
+            repository = Path(directory) / "DemoKit"
+            versioned_docc.run(["git", "init", "-q", str(repository)])
+            versioned_docc.git(repository, "config", "user.email", "test@example.com")
+            versioned_docc.git(repository, "config", "user.name", "Test")
+            (repository / "Package.swift").write_text("// package\n", encoding="utf-8")
+            versioned_docc.git(repository, "add", "Package.swift")
+            versioned_docc.git(repository, "commit", "-qm", "initial")
+            commit = versioned_docc.git(repository, "rev-parse", "HEAD")
+            config = {
+                "documentationOnly": False,
+                "defaultVersion": "main",
+                "versions": [
+                    {"name": "main", "ref": "HEAD"},
+                    {"name": "0.1.0", "ref": "HEAD"},
+                ],
+            }
+
+            self.assertEqual(
+                versioned_docc.resolved_versions(repository, config),
+                [
+                    {"name": "main", "ref": "HEAD", "commit": commit},
+                    {"name": "0.1.0", "ref": "HEAD", "commit": commit},
+                ],
+            )
+
+    def test_additional_module_source_repository_and_root_are_paired(self):
+        config = {
+            "schemaVersion": 1,
+            "projectName": "DemoKit",
+            "moduleName": "DemoKit",
+            "targetName": "DemoKit",
+            "catalogPath": "Sources/DemoKit/DemoKit.docc",
+            "hostingBasePath": "/DemoKit",
+            "versions": [
+                {"name": "main", "ref": "HEAD"},
+                {"name": "0.1.0", "ref": "0.1.0"},
+            ],
+            "additionalModules": [
+                {
+                    "moduleName": "PlatformBackend",
+                    "symbolGraphPath": ".docs/inputs/{version}/{module}",
+                    "sourceRepository": "https://github.com/Example/PlatformBackend",
+                    "sourceRoot": "../PlatformBackend",
+                }
+            ],
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = root / ".vdc.json"
+            path.write_text(json.dumps(config), encoding="utf-8")
+
+            loaded, _ = versioned_docc.load_config(root, path)
+            self.assertEqual(
+                loaded["additionalModules"][0]["sourceRoot"],
+                "../PlatformBackend",
+            )
+
+            del config["additionalModules"][0]["sourceRoot"]
+            path.write_text(json.dumps(config), encoding="utf-8")
+            with self.assertRaisesRegex(
+                versioned_docc.VersionedDocCError,
+                "sourceRepository and .*sourceRoot must be configured together",
+            ):
+                versioned_docc.load_config(root, path)
 
     def test_import_symbol_graphs_rewrites_checkout_location(self):
         with tempfile.TemporaryDirectory() as directory:

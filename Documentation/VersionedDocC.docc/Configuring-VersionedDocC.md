@@ -103,7 +103,10 @@ different runner, such as macOS, Linux, iOS, and Windows backends:
   },
   {
     "moduleName": "UIKitBackend",
-    "symbolGraphPath": ".docs/symbol-graphs/{version}/UIKitBackend"
+    "symbolGraphPath": ".docs/symbol-graphs/{version}/UIKitBackend",
+    "catalogPath": "Sources/UIKitBackend/UIKitBackend.docc",
+    "sourceRepository": "https://github.com/Example/UIKitBackend",
+    "sourceRoot": "../UIKitBackend"
   }
 ]
 ```
@@ -115,10 +118,18 @@ module, remaps CI checkout locations, converts each module, and merges the
 archives into one versioned site.
 
 Set `catalogPath` on a module when it has authored documentation. Without one,
-VersionedDocC supplies an empty catalog. Set `versions` to an array of published
-version names only when the module is intentionally unavailable elsewhere.
-Otherwise an external graph input is required for every version. All imported
-module graphs participate in adjacent-version API Changes.
+VersionedDocC supplies an empty catalog. Every additional module follows the
+primary module's complete documentation version set, and therefore requires an
+external graph input for every version. All imported module graphs participate
+in adjacent-version API Changes.
+
+Modules from the primary package repository inherit its source routing. When an
+additional module comes from another repository, configure `sourceRepository`
+and `sourceRoot` together. The root is relative to the prepared primary checkout
+and must identify a dependency checkout created through `localDependencies`.
+VersionedDocC reads the checkout's exact Git commit and uses that SHA for source
+and Edit links. In this form, `catalogPath` is relative to the module's source
+root, while `symbolGraphPath` remains relative to the package root.
 
 ## Publish a standalone catalog
 

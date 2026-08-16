@@ -196,14 +196,28 @@ def load_config(package_root, config_path):
             not isinstance(catalog_path, str) or not catalog_path
         ):
             raise VersionedDocCError(f"{label}.catalogPath must be a non-empty string")
-        versions = module.get("versions")
-        if versions is not None and (
-            not isinstance(versions, list)
-            or not versions
-            or not all(isinstance(item, str) and item for item in versions)
+        source_repository = module.get("sourceRepository")
+        source_root = module.get("sourceRoot")
+        if (source_repository is None) != (source_root is None):
+            raise VersionedDocCError(
+                f"{label}.sourceRepository and {label}.sourceRoot must be configured together"
+            )
+        if source_repository is not None and (
+            not isinstance(source_repository, str) or not source_repository
         ):
             raise VersionedDocCError(
-                f"{label}.versions must be a non-empty array of strings"
+                f"{label}.sourceRepository must be a non-empty string"
+            )
+        if source_root is not None and (
+            not isinstance(source_root, str) or not source_root
+        ):
+            raise VersionedDocCError(
+                f"{label}.sourceRoot must be a non-empty string"
+            )
+        if "versions" in module:
+            raise VersionedDocCError(
+                f"{label}.versions is not supported; additional modules follow "
+                "every documentation version"
             )
         if module_name.casefold() in module_names:
             raise VersionedDocCError(f"duplicate moduleName: {module_name}")
@@ -350,8 +364,6 @@ def modules_for_version(config, version):
         }
     ]
     for module in config["additionalModules"]:
-        if module.get("versions") and version["name"] not in module["versions"]:
-            continue
         modules.append({**module, "primary": False})
     return modules
 
@@ -549,6 +561,16 @@ def configured_versions(repository, config):
     if len(normalized) < 2:
         raise VersionedDocCError("at least two documentation versions are required")
     return normalized
+
+
+def resolved_versions(repository, config):
+    return [
+        {
+            **version,
+            "commit": git(repository, "rev-parse", f"{version['ref']}^{{commit}}"),
+        }
+        for version in configured_versions(repository, config)
+    ]
 
 
 def find_docc():
@@ -828,17 +850,81 @@ def append_custom_footer(catalog, rendered_footer):
     )
 
 
-def source_service_arguments(config, version, source_root):
-    source_repository = config.get("sourceRepository")
+def prepared_dependency_roots(package_root, config, source_root):
+    roots = {}
+    for identity, configured_path in config.get("localDependencies", {}).items():
+        repository = resolve_path(package_root, configured_path)
+        roots[identity.casefold()] = (source_root.parent / repository.name).resolve()
+    return roots
+
+
+def module_source_route(package_root, config, version, source_root, module=None):
+    module = module or {}
+    source_repository = module.get(
+        "sourceRepository", config.get("sourceRepository")
+    )
     if not source_repository:
+        return None
+
+    configured_root = module.get("sourceRoot")
+    if configured_root is None:
+        checkout_root = source_root.resolve()
+        reference = source_reference(config, version)
+    else:
+        checkout_root = resolve_path(source_root, configured_root).resolve()
+        dependency_roots = prepared_dependency_roots(
+            package_root, config, source_root
+        )
+        matching_dependencies = [
+            identity
+            for identity, dependency_root in dependency_roots.items()
+            if dependency_root == checkout_root
+        ]
+        if not matching_dependencies:
+            raise VersionedDocCError(
+                f"sourceRoot for {module['moduleName']} must identify a prepared "
+                "localDependencies checkout"
+            )
+        if not checkout_root.is_dir():
+            raise VersionedDocCError(
+                f"missing sourceRoot for {module['moduleName']}: {checkout_root}"
+            )
+        repository_root = Path(
+            git(checkout_root, "rev-parse", "--show-toplevel")
+        ).resolve()
+        if repository_root != checkout_root:
+            raise VersionedDocCError(
+                f"sourceRoot for {module['moduleName']} is not a Git checkout root: "
+                f"{checkout_root}"
+            )
+        reference = git(checkout_root, "rev-parse", "HEAD")
+
+    return {
+        "repository": source_repository.rstrip("/"),
+        "reference": reference,
+        "checkoutRoot": checkout_root,
+    }
+
+
+def source_service_arguments(
+    config, version, source_root, module=None, package_root=None
+):
+    route = module_source_route(
+        package_root or source_root,
+        config,
+        version,
+        source_root,
+        module,
+    )
+    if route is None:
         return []
     return [
         "--source-service",
         "github",
         "--source-service-base-url",
-        f"{source_repository.rstrip('/')}/blob/{source_reference(config, version)}",
+        f"{route['repository']}/blob/{route['reference']}",
         "--checkout-path",
-        str(source_root.resolve()),
+        str(route["checkoutRoot"]),
     ]
 
 
@@ -902,10 +988,11 @@ def inject_edit_metadata(
     version,
     edit_reference,
     authored_archive_identifier=None,
+    source_repository=None,
 ):
     if not site_ui_value(config, "showEdit"):
         return 0
-    repository = config["sourceRepository"].rstrip("/")
+    repository = (source_repository or config["sourceRepository"]).rstrip("/")
     candidates, technology_roots = markdown_edit_sources(
         catalog,
         repository_catalog_path,
@@ -1513,6 +1600,16 @@ def build_version(
                 ]
             else:
                 modules = modules_for_version(config, version)
+            module_source_routes = {
+                module.get("moduleName"): module_source_route(
+                    package_root,
+                    config,
+                    version,
+                    source_root,
+                    module,
+                )
+                for module in modules
+            }
             module_graph_roots = {}
             if not config["documentationOnly"]:
                 primary_graph_root = (
@@ -1529,9 +1626,16 @@ def build_version(
                         graph_root
                         / f"{index:02d}-{platform_slug(module['moduleName'])}"
                     )
+                    module_source_route_value = module_source_routes[
+                        module["moduleName"]
+                    ]
                     import_symbol_graphs(
                         package_root,
-                        source_root,
+                        (
+                            module_source_route_value["checkoutRoot"]
+                            if module_source_route_value
+                            else source_root
+                        ),
                         module,
                         version,
                         commit,
@@ -1548,10 +1652,21 @@ def build_version(
             for index, module in enumerate(modules):
                 module_name = module.get("moduleName")
                 module_catalog_path = module.get("catalogPath")
+                source_route = module_source_routes[module_name]
+                module_source_root = (
+                    source_route["checkoutRoot"] if source_route else source_root
+                )
                 edit_catalog_path = module_catalog_path or ""
-                edit_reference = source_reference(config, version)
+                edit_reference = (
+                    source_route["reference"]
+                    if source_route
+                    else source_reference(config, version)
+                )
+                edit_repository = (
+                    source_route["repository"] if source_route else None
+                )
                 source_catalog = (
-                    source_root / module_catalog_path
+                    module_source_root / module_catalog_path
                     if module_catalog_path
                     else None
                 )
@@ -1634,7 +1749,15 @@ def build_version(
                         *config["doccArguments"],
                     ]
                 )
-                docc.extend(source_service_arguments(config, version, source_root))
+                docc.extend(
+                    source_service_arguments(
+                        config,
+                        version,
+                        source_root,
+                        module,
+                        package_root,
+                    )
+                )
                 log_module = platform_slug(module_name or config["modulePath"])
                 run(
                     docc,
@@ -1647,6 +1770,7 @@ def build_version(
                             catalog,
                             edit_catalog_path,
                             edit_reference,
+                            edit_repository,
                             Path(catalog_name).stem,
                         )
                     )
@@ -1668,6 +1792,7 @@ def build_version(
                 catalog,
                 edit_catalog_path,
                 edit_reference,
+                edit_repository,
                 archive_identifier,
             ) in prepared_catalogs:
                 inject_edit_metadata(
@@ -1678,6 +1803,7 @@ def build_version(
                     version,
                     edit_reference,
                     archive_identifier,
+                    source_repository=edit_repository,
                 )
             theme_settings = staging / "site" / "theme-settings.json"
             if not theme_settings.exists():
@@ -1713,6 +1839,18 @@ def build_version(
     if config.get("sourceRepository"):
         metadata["sourceRepository"] = config["sourceRepository"].rstrip("/")
         metadata["sourceRef"] = source_reference(config, version)
+    module_sources = {}
+    for module in modules:
+        route = module_source_routes[module.get("moduleName")]
+        if route is None:
+            continue
+        module_identifier = module.get("moduleName") or module["modulePath"]
+        module_sources[module_identifier] = {
+            "repository": route["repository"],
+            "ref": route["reference"],
+        }
+    if module_sources:
+        metadata["moduleSources"] = module_sources
     (staging / "metadata.json").write_text(
         json.dumps(metadata, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )
@@ -2181,6 +2319,19 @@ def preview_command(arguments):
     server.serve_forever()
 
 
+def resolve_versions_command(arguments):
+    package_root = resolve_path(Path.cwd(), arguments.package_path)
+    config, _ = load_config(package_root, arguments.config)
+    output_path = resolve_path(package_root, arguments.output)
+    ensure_safe_child(output_path, package_root, "resolved versions output")
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(
+        json.dumps(resolved_versions(package_root, config), indent=2) + "\n",
+        encoding="utf-8",
+    )
+    print(f"Resolved documentation versions at {output_path}")
+
+
 def parse_arguments():
     parser = argparse.ArgumentParser(
         prog="versioned-docc",
@@ -2213,6 +2364,13 @@ def parse_arguments():
     preview.add_argument("--output")
     preview.add_argument("--bind", default="127.0.0.1")
     preview.add_argument("--port", type=int, default=8766)
+    resolve_versions = subparsers.add_parser(
+        "resolve-versions",
+        help="Write the configured documentation versions and exact commits as JSON",
+    )
+    resolve_versions.add_argument("--package-path", default=".")
+    resolve_versions.add_argument("--config", default=DEFAULT_CONFIG)
+    resolve_versions.add_argument("--output", required=True)
     arguments = parser.parse_args()
     if arguments.command is None:
         arguments = parser.parse_args(["build", *sys.argv[1:]])
@@ -2223,6 +2381,8 @@ def main():
     arguments = parse_arguments()
     if arguments.command == "preview":
         preview_command(arguments)
+    elif arguments.command == "resolve-versions":
+        resolve_versions_command(arguments)
     else:
         build_command(arguments)
 
