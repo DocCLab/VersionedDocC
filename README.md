@@ -62,7 +62,7 @@ Add `.vdc.json` to the package root:
 
 ```json
 {
-  "$schema": "https://raw.githubusercontent.com/DocCLab/VersionedDocC/0.1.0/Schema/VersionedDocC.schema.json",
+  "$schema": "https://raw.githubusercontent.com/DocCLab/VersionedDocC/0.1.1/Schema/VersionedDocC.schema.json",
   "schemaVersion": 1,
   "projectName": "ExampleKit",
   "moduleName": "ExampleKit",
@@ -143,7 +143,7 @@ aren't used:
 
 ```json
 {
-  "$schema": "https://raw.githubusercontent.com/DocCLab/VersionedDocC/0.1.0/Schema/VersionedDocC.schema.json",
+  "$schema": "https://raw.githubusercontent.com/DocCLab/VersionedDocC/0.1.1/Schema/VersionedDocC.schema.json",
   "schemaVersion": 1,
   "documentationOnly": true,
   "projectName": "swift-book",
@@ -346,7 +346,7 @@ Add VersionedDocC as a direct package dependency:
 ```swift
 .package(
     url: "https://github.com/DocCLab/VersionedDocC.git",
-    exact: "0.1.0"
+    exact: "0.1.1"
 )
 ```
 
@@ -437,7 +437,7 @@ history:
     fetch-depth: 0
 - uses: oras-project/setup-oras@v1
 - run: echo "${{ github.token }}" | oras login ghcr.io --username "${{ github.actor }}" --password-stdin
-- uses: DocCLab/VersionedDocC@0.1.0
+- uses: DocCLab/VersionedDocC@0.1.1
   with:
     config: .vdc.json
     publish-oci-cache: true
@@ -448,7 +448,7 @@ OpenSwiftUIProject repositories can alternatively use the reusable workflow:
 ```yaml
 jobs:
   documentation:
-    uses: DocCLab/VersionedDocC/.github/workflows/pages.yml@0.1.0
+    uses: DocCLab/VersionedDocC/.github/workflows/pages.yml@0.1.1
     with:
       config: .vdc.json
       artifact-path: .docs/build/versioned-site

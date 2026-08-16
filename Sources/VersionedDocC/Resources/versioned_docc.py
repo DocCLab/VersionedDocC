@@ -19,7 +19,7 @@ from pathlib import Path
 from urllib.parse import quote, unquote, urlsplit
 
 
-VERSION = "0.1.0"
+VERSION = "0.1.1"
 DEFAULT_CONFIG = ".vdc.json"
 # Keep this stable across releases that only change assembly, routing, or the
 # command interface. Bump it only when the per-version DocC cache contents must

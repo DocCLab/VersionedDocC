@@ -1,5 +1,5 @@
 {
-  "$schema": "https://raw.githubusercontent.com/DocCLab/VersionedDocC/0.1.0/Schema/VersionedDocC.schema.json",
+  "$schema": "https://raw.githubusercontent.com/DocCLab/VersionedDocC/0.1.1/Schema/VersionedDocC.schema.json",
   "schemaVersion": 1,
   "documentationOnly": true,
   "projectName": "VersionedDocC",
