@@ -24,7 +24,7 @@ DEFAULT_CONFIG = ".vdc.json"
 # Keep this stable across releases that only change assembly, routing, or the
 # command interface. Bump it only when the per-version DocC cache contents must
 # be regenerated. Its initial value preserves 0.0.1 cache fingerprints.
-BUILD_CACHE_REVISION = "0.0.4"
+BUILD_CACHE_REVISION = "0.0.5"
 SEMVER = re.compile(r"^v?(\d+)\.(\d+)\.(\d+)(?:[-+].*)?$")
 LATEST_RELEASE_STRATEGIES = {"majorMinor", "semanticVersion", "tagDate"}
 OPTIONS_TOKEN = "__VERSIONED_DOCC_VERSION_OPTIONS__"
@@ -1382,6 +1382,18 @@ def external_symbol_graph_path(package_root, module, version, commit):
     return resolve_path(package_root, configured)
 
 
+def staged_catalog_path(
+    catalog_root, catalog_name, module_name, index, module_count
+):
+    if module_count == 1:
+        return catalog_root / catalog_name
+    return (
+        catalog_root
+        / f"{index:02d}-{platform_slug(module_name)}"
+        / catalog_name
+    )
+
+
 def rewrite_symbol_graph_locations(graph_path, source_root):
     with graph_path.open(encoding="utf-8") as source:
         graph = json.load(source)
@@ -1573,12 +1585,14 @@ def build_version(
                     if source_catalog is not None
                     else f"{module_name}.docc"
                 )
-                archived_catalog_name = (
-                    catalog_name
-                    if len(modules) == 1
-                    else f"{index:02d}-{catalog_name}"
+                catalog = staged_catalog_path(
+                    staging / "catalog",
+                    catalog_name,
+                    module_name,
+                    index,
+                    len(modules),
                 )
-                catalog = staging / "catalog" / archived_catalog_name
+                catalog.parent.mkdir(parents=True, exist_ok=True)
                 if source_catalog is None:
                     catalog.mkdir()
                 else:
@@ -1633,7 +1647,7 @@ def build_version(
                             catalog,
                             edit_catalog_path,
                             edit_reference,
-                            Path(archived_catalog_name).stem,
+                            Path(catalog_name).stem,
                         )
                     )
                 archives.append(output)

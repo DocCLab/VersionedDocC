@@ -835,8 +835,8 @@ class VersionedDocCTests(unittest.TestCase):
     def test_edit_metadata_does_not_apply_authored_page_to_merged_module(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            catalog = root / "00-DemoKit.docc"
-            catalog.mkdir()
+            catalog = root / "00-demokit" / "DemoKit.docc"
+            catalog.mkdir(parents=True)
             (catalog / "Backend.md").write_text(
                 "# ``Backend``\n", encoding="utf-8"
             )
@@ -853,7 +853,7 @@ class VersionedDocCTests(unittest.TestCase):
                 json.dumps(
                     {
                         "identifier": {
-                            "url": "doc://01-Backend/documentation/Backend/Backend"
+                            "url": "doc://Backend/documentation/Backend/Backend"
                         },
                         "metadata": {
                             "role": "symbol",
@@ -878,7 +878,7 @@ class VersionedDocCTests(unittest.TestCase):
                 config,
                 {"name": "main"},
                 "main",
-                "00-DemoKit",
+                "DemoKit",
             )
 
             document = json.loads(document_path.read_text())
@@ -886,6 +886,22 @@ class VersionedDocCTests(unittest.TestCase):
                 document["metadata"]["versionedDocC"]["editURL"],
                 "https://github.com/Example/DemoKit/edit/main/Sources/Backend/Backend.swift#L1",
             )
+
+    def test_multi_module_catalogs_keep_their_original_basenames(self):
+        with tempfile.TemporaryDirectory() as directory:
+            catalog_root = Path(directory)
+            primary = versioned_docc.staged_catalog_path(
+                catalog_root, "Shared.docc", "DemoKit", 0, 2
+            )
+            backend = versioned_docc.staged_catalog_path(
+                catalog_root, "Shared.docc", "PlatformBackend", 1, 2
+            )
+
+        self.assertEqual(primary.name, "Shared.docc")
+        self.assertEqual(backend.name, "Shared.docc")
+        self.assertEqual(primary.parent.name, "00-demokit")
+        self.assertEqual(backend.parent.name, "01-platformbackend")
+        self.assertNotEqual(primary, backend)
 
     def test_legacy_routing_files_cover_project_and_deploy_roots(self):
         config = {
